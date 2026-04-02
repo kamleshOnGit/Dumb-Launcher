@@ -1,0 +1,4 @@
+/* NativeWind handles Tailwind styles - no directives needed here */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
