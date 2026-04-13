@@ -1,28 +1,19 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TextInput, Pressable, Alert } from 'react-native';
+import React, { useMemo } from 'react';
+import { View, Text, ScrollView, Pressable, Alert, PanResponder } from 'react-native';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { Linking } from 'react-native';
+import { router } from 'expo-router';
 import { useLauncherMode } from '../../src/hooks/useLauncherMode';
+import { ALL_LAUNCHER_APPS, HOME_LAUNCHER_APP_NAMES } from '../../src/constants/launcherApps';
 
 export default function TabOneScreen() {
-  const { isFocusWindow } = useLauncherMode();
-  const [currentTime, setCurrentTime] = useState(new Date());
-  const [searchQuery, setSearchQuery] = useState('');
+  const { mode, setMode, canUseRelax, currentTime, settings } = useLauncherMode();
 
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setCurrentTime(new Date());
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, []);
-
-  const formatTime = (date: Date) => {
-    return date.toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    });
-  };
+  const withAlpha = (hex: string, alpha: string) => `${hex}${alpha}`;
+  const hours = currentTime.getHours() % 12;
+  const minutes = currentTime.getMinutes();
+  const hourRotation = hours * 30 + minutes * 0.5;
+  const minuteRotation = minutes * 6;
 
   const formatDate = (date: Date) => {
     return date.toLocaleDateString('en-US', {
@@ -33,17 +24,25 @@ export default function TabOneScreen() {
   };
 
   // Real apps that can be launched
-  const preferredApps = [
-    { name: 'Phone', scheme: 'tel:' },
-    { name: 'Messages', scheme: 'sms:' },
-    { name: 'Contacts', scheme: 'content://contacts/people' },
-    { name: 'Calendar', scheme: 'content://calendar' },
-    { name: 'Camera', scheme: 'camera:' }
-  ];
+  const preferredApps = useMemo(
+    () => ALL_LAUNCHER_APPS.filter((app) => HOME_LAUNCHER_APP_NAMES.includes(app.name)),
+    []
+  );
 
-  // Filter apps based on search query
-  const filteredApps = preferredApps.filter(app =>
-    app.name.toLowerCase().includes(searchQuery.toLowerCase())
+  const swipeResponder = useMemo(
+    () => PanResponder.create({
+      onMoveShouldSetPanResponder: (_, gestureState) => Math.abs(gestureState.dx) > 20 && Math.abs(gestureState.dy) < 20,
+      onPanResponderRelease: (_, gestureState) => {
+        if (gestureState.dx < -60) {
+          router.push('/(tabs)/two');
+        }
+
+        if (gestureState.dx > 60) {
+          router.push('/(tabs)/productive');
+        }
+      },
+    }),
+    []
   );
 
   const launchApp = async (app: { name: string; scheme: string }) => {
@@ -59,48 +58,144 @@ export default function TabOneScreen() {
     }
   };
 
-  // Mode-based styles
-  const bgStyle = isFocusWindow ? "bg-black" : "bg-zinc-900";
-  const accentText = isFocusWindow ? "text-white" : "text-blue-400";
+  const modeConfig = {
+    Focus: {
+      bgStyle: 'bg-black',
+      accentText: 'text-white',
+      pill: 'bg-blue-500/20 border-blue-400/40',
+      label: 'Deep focus mode',
+    },
+    Productive: {
+      bgStyle: 'bg-zinc-950',
+      accentText: 'text-emerald-300',
+      pill: 'bg-emerald-500/20 border-emerald-400/40',
+      label: 'Flexible productive mode',
+    },
+    Relax: {
+      bgStyle: 'bg-zinc-900',
+      accentText: 'text-purple-300',
+      pill: 'bg-purple-500/20 border-purple-400/40',
+      label: 'Relax mode unlocked',
+    },
+  }[mode];
+
+  const handleModeSwitch = (nextMode: 'Focus' | 'Productive' | 'Relax') => {
+    const changed = setMode(nextMode);
+
+    if (!changed) {
+      Alert.alert('Relax locked', `Relax mode is available after ${settings.focusEndHour}:00.`);
+    }
+  };
 
   return (
-    <View className={`flex-1 ${bgStyle} px-8 pt-20`}>
-      {/* Clock Widget */}
-      <View className="mb-12">
-        <Text className="text-white text-7xl font-extralight tracking-tighter">
-          {formatTime(currentTime)}
-        </Text>
-        <Text className="text-zinc-500 text-lg ml-1">
+    <View
+      className={`flex-1 ${modeConfig.bgStyle} px-8 pt-20`}
+      style={{ backgroundColor: withAlpha(settings.launcherColor, '10') }}
+      {...swipeResponder.panHandlers}
+    >
+      <View className="mb-12 items-center justify-center">
+        <View
+          className="mb-6 h-56 w-56 items-center justify-center rounded-full border"
+          style={{ borderColor: withAlpha(settings.launcherColor, '66'), backgroundColor: withAlpha(settings.launcherColor, '12') }}
+        >
+          {[0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330].map((rotation) => (
+            <View
+              key={rotation}
+              className="absolute h-3 w-[2px] rounded-full"
+              style={{
+                backgroundColor: settings.launcherColor,
+                transform: [{ rotate: `${rotation}deg` }, { translateY: -96 }],
+              }}
+            />
+          ))}
+          <View
+            className="absolute h-16 w-1 rounded-full"
+            style={{
+              backgroundColor: '#ffffff',
+              transform: [{ rotate: `${hourRotation}deg` }, { translateY: -28 }],
+            }}
+          />
+          <View
+            className="absolute h-24 w-[2px] rounded-full"
+            style={{
+              backgroundColor: settings.launcherColor,
+              transform: [{ rotate: `${minuteRotation}deg` }, { translateY: -40 }],
+            }}
+          />
+          <View className="h-4 w-4 rounded-full" style={{ backgroundColor: settings.launcherColor }} />
+        </View>
+        <Text className="text-zinc-500 text-lg text-center">
           {formatDate(currentTime)}
         </Text>
+        <View className={`mt-4 rounded-full border px-4 py-2 ${modeConfig.pill}`} style={{ borderColor: withAlpha(settings.launcherColor, '66'), backgroundColor: withAlpha(settings.launcherColor, '18') }}>
+          <Text className="text-xs uppercase tracking-[3px]" style={{ color: settings.launcherColor }}>
+            {modeConfig.label}
+          </Text>
+        </View>
       </View>
 
       {/* App List */}
       <ScrollView className="flex-1">
-        {filteredApps.map((app) => (
+        {preferredApps.map((app) => (
           <Pressable
             key={app.name}
             onPress={() => launchApp(app)}
+            className="mb-4 flex-row items-center gap-4"
           >
-            <Text className={`text-2xl mb-6 font-light ${accentText}`}>
+            <View className="h-14 w-14 items-center justify-center rounded-2xl" style={{ backgroundColor: withAlpha(settings.launcherColor, '22') }}>
+              <MaterialIcons name={app.icon} size={26} color={settings.launcherColor} />
+            </View>
+            <Text className="text-2xl font-light" style={{ color: settings.launcherColor }}>
               {app.name}
             </Text>
           </Pressable>
         ))}
-        {filteredApps.length === 0 && (
-          <Text className="text-zinc-600 text-lg font-light mt-4">No apps found</Text>
-        )}
       </ScrollView>
 
-      {/* Global Search Bar */}
-      <View className="mb-10 bg-zinc-800/50 rounded-2xl px-5 py-4 border border-white/5">
-        <TextInput
-          placeholder="Search apps or people..."
-          placeholderTextColor="#71717a"
-          className="text-zinc-500 font-light"
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-        />
+      <View className="mb-8 flex-row gap-3">
+        {(['Focus', 'Productive', 'Relax'] as const).map((modeOption) => {
+          const isActive = mode === modeOption;
+          const isDisabled = modeOption === 'Relax' && !canUseRelax;
+
+          return (
+            <Pressable
+              key={modeOption}
+              onPress={() => handleModeSwitch(modeOption)}
+              className={`flex-1 rounded-2xl border px-4 py-3 ${
+                isActive ? 'border-white bg-white/15' : 'border-white/10 bg-white/5'
+              } ${isDisabled ? 'opacity-40' : 'opacity-100'}`}
+              style={isActive ? { borderColor: settings.launcherColor, backgroundColor: withAlpha(settings.launcherColor, '22') } : undefined}
+            >
+              <Text className="text-center text-sm font-medium text-white">
+                {modeOption}
+              </Text>
+              <Text className="mt-1 text-center text-[10px] uppercase tracking-[2px] text-zinc-400">
+                {modeOption === 'Relax' && !canUseRelax ? `After ${settings.focusEndHour}:00` : 'Available'}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      <View className="mb-8 flex-row items-center justify-between">
+        <Pressable
+          onPress={() => router.push('/(tabs)/productive')}
+          className="flex-row items-center gap-2"
+        >
+          <MaterialIcons name="arrow-back" size={16} color={settings.launcherColor} />
+          <Text className="text-xs uppercase tracking-[3px]" style={{ color: withAlpha(settings.launcherColor, 'cc') }}>
+            Swipe right for productive
+          </Text>
+        </Pressable>
+        <Pressable
+          onPress={() => router.push('/(tabs)/two')}
+          className="flex-row items-center gap-2"
+        >
+          <Text className="text-xs uppercase tracking-[3px]" style={{ color: withAlpha(settings.launcherColor, 'cc') }}>
+            Swipe left for library
+          </Text>
+          <MaterialIcons name="arrow-forward" size={16} color={settings.launcherColor} />
+        </Pressable>
       </View>
     </View>
   );
