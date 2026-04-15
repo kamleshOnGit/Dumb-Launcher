@@ -25,7 +25,8 @@
       "predictiveBackGestureEnabled": false,
       "package": "com.yourname.dumblauncher",
       "permissions": [
-        "QUERY_ALL_PACKAGES"
+        "QUERY_ALL_PACKAGES",
+        "android.permission.READ_CONTACTS"
       ],
       "intentFilters": [
         {

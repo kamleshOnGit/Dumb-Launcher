@@ -26,4 +26,4 @@ export const ALL_LAUNCHER_APPS: LauncherApp[] = [
 ];
 
 export const HOME_LAUNCHER_APP_NAMES = ['Phone', 'Messages', 'Contacts', 'Calendar', 'Camera'];
-export const PRODUCTIVE_LAUNCHER_APP_NAMES = ['Calendar', 'Slack', 'Messages', 'Contacts', 'Calculator', 'Settings'];
+export const PRODUCTIVE_LAUNCHER_APP_NAMES = ['Slack', 'Messages', 'Contacts', 'Calculator', 'Settings'];

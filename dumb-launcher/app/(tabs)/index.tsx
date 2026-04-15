@@ -90,7 +90,7 @@ export default function TabOneScreen() {
   return (
     <View
       className={`flex-1 ${modeConfig.bgStyle} px-8 pt-20`}
-      style={{ backgroundColor: withAlpha(settings.launcherColor, '10') }}
+      style={{ backgroundColor: 'transparent' }}
       {...swipeResponder.panHandlers}
     >
       <View className="mb-12 items-center justify-center">
@@ -177,24 +177,15 @@ export default function TabOneScreen() {
         })}
       </View>
 
-      <View className="mb-8 flex-row items-center justify-between">
-        <Pressable
-          onPress={() => router.push('/(tabs)/productive')}
-          className="flex-row items-center gap-2"
-        >
-          <MaterialIcons name="arrow-back" size={16} color={settings.launcherColor} />
-          <Text className="text-xs uppercase tracking-[3px]" style={{ color: withAlpha(settings.launcherColor, 'cc') }}>
-            Swipe right for productive
-          </Text>
+      <View className="mb-8 flex-row items-center justify-center gap-3">
+        <Pressable onPress={() => router.push('/(tabs)/productive')}>
+          <MaterialIcons name="fiber-manual-record" size={10} color={withAlpha(settings.launcherColor, '44')} />
         </Pressable>
-        <Pressable
-          onPress={() => router.push('/(tabs)/two')}
-          className="flex-row items-center gap-2"
-        >
-          <Text className="text-xs uppercase tracking-[3px]" style={{ color: withAlpha(settings.launcherColor, 'cc') }}>
-            Swipe left for library
-          </Text>
-          <MaterialIcons name="arrow-forward" size={16} color={settings.launcherColor} />
+        <Pressable onPress={() => router.push('/(tabs)')}>
+          <MaterialIcons name="fiber-manual-record" size={10} color={settings.launcherColor} />
+        </Pressable>
+        <Pressable onPress={() => router.push('/(tabs)/two')}>
+          <MaterialIcons name="fiber-manual-record" size={10} color={withAlpha(settings.launcherColor, '44')} />
         </Pressable>
       </View>
     </View>

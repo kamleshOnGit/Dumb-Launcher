@@ -18,6 +18,39 @@ const SYSTEM_SHORTCUTS = [
 
 const withAlpha = (hex: string, alpha: string) => `${hex}${alpha}`;
 
+// Map app names to MaterialIcons for consistent theming
+const getMaterialIconForApp = (appName: string): React.ComponentProps<typeof MaterialIcons>['name'] => {
+  const nameLower = appName.toLowerCase();
+  if (nameLower.includes('phone') || nameLower.includes('dial')) return 'phone';
+  if (nameLower.includes('message') || nameLower.includes('sms')) return 'message';
+  if (nameLower.includes('contact')) return 'contacts';
+  if (nameLower.includes('camera')) return 'camera-alt';
+  if (nameLower.includes('gallery') || nameLower.includes('photo')) return 'photo-library';
+  if (nameLower.includes('setting')) return 'settings';
+  if (nameLower.includes('calculator')) return 'calculate';
+  if (nameLower.includes('calendar')) return 'calendar-month';
+  if (nameLower.includes('clock') || nameLower.includes('alarm')) return 'access-time';
+  if (nameLower.includes('browser') || nameLower.includes('chrome')) return 'language';
+  if (nameLower.includes('mail') || nameLower.includes('gmail')) return 'email';
+  if (nameLower.includes('map') || nameLower.includes('navigation')) return 'map';
+  if (nameLower.includes('music') || nameLower.includes('spotify')) return 'music-note';
+  if (nameLower.includes('video') || nameLower.includes('youtube') || nameLower.includes('netflix')) return 'play-circle-filled';
+  if (nameLower.includes('file') || nameLower.includes('document')) return 'folder';
+  if (nameLower.includes('note')) return 'note';
+  if (nameLower.includes('weather')) return 'wb-sunny';
+  if (nameLower.includes('shopping') || nameLower.includes('amazon')) return 'shopping-bag';
+  if (nameLower.includes('social') || nameLower.includes('facebook') || nameLower.includes('instagram')) return 'people';
+  if (nameLower.includes('chat') || nameLower.includes('whatsapp') || nameLower.includes('telegram')) return 'chat';
+  if (nameLower.includes('work') || nameLower.includes('slack') || nameLower.includes('teams')) return 'work';
+  if (nameLower.includes('bank') || nameLower.includes('pay') || nameLower.includes('wallet')) return 'account-balance-wallet';
+  if (nameLower.includes('health') || nameLower.includes('fitness')) return 'favorite';
+  if (nameLower.includes('game')) return 'sports-esports';
+  if (nameLower.includes('book') || nameLower.includes('read')) return 'book';
+  if (nameLower.includes('drive') || nameLower.includes('cloud')) return 'cloud';
+  if (nameLower.includes('search') || nameLower.includes('google')) return 'search';
+  return 'apps';
+};
+
 type DeviceApp = {
   id: string;
   name: string;
@@ -198,7 +231,7 @@ export default function TabTwoScreen() {
   return (
     <View
       className="flex-1 bg-black px-6 pt-16"
-      style={{ backgroundColor: withAlpha(settings.launcherColor, '12') }}
+      style={{ backgroundColor: 'transparent' }}
       {...swipeResponder.panHandlers}
     >
       {/* Header with Real-time Status */}
@@ -410,15 +443,11 @@ export default function TabTwoScreen() {
           >
             <View className="flex-row items-center gap-3">
               <View className="h-12 w-12 items-center justify-center rounded-2xl overflow-hidden" style={{ backgroundColor: isAppLocked(item.name, item.category) ? '#18181b' : withAlpha(item.accentColor || settings.launcherColor, '22') }}>
-                {typeof item.icon === 'string' && (item.icon.startsWith('file:') || item.icon.startsWith('/') || item.icon.startsWith('content:')) ? (
-                  <Image source={{ uri: item.icon }} style={{ width: 28, height: 28, borderRadius: 8 }} />
-                ) : (
-                  <MaterialIcons
-                    name={item.icon as React.ComponentProps<typeof MaterialIcons>['name']}
-                    size={24}
-                    color={isAppLocked(item.name, item.category) ? '#52525b' : item.accentColor || settings.launcherColor}
-                  />
-                )}
+                <MaterialIcons
+                  name={getMaterialIconForApp(item.name)}
+                  size={24}
+                  color={isAppLocked(item.name, item.category) ? '#52525b' : item.accentColor || settings.launcherColor}
+                />
               </View>
               <View>
                 <Text className={`text-xl font-light ${isAppLocked(item.name, item.category) ? 'text-zinc-700' : 'text-zinc-300'}`}>
@@ -448,12 +477,17 @@ export default function TabTwoScreen() {
               ? `Entertainment peek: ${settings.peekMinutes} min`
               : 'All Apps Available'}
         </Text>
-        <Pressable onPress={() => router.push('/(tabs)')} className="mt-4 flex-row items-center justify-center gap-2">
-          <MaterialIcons name="arrow-back" size={16} color={settings.launcherColor} />
-          <Text className="text-xs uppercase tracking-[3px]" style={{ color: withAlpha(settings.launcherColor, 'cc') }}>
-            Swipe right for home
-          </Text>
-        </Pressable>
+        <View className="mt-4 flex-row items-center justify-center gap-3">
+          <Pressable onPress={() => router.push('/(tabs)/productive')}>
+            <MaterialIcons name="fiber-manual-record" size={10} color={withAlpha(settings.launcherColor, '44')} />
+          </Pressable>
+          <Pressable onPress={() => router.push('/(tabs)')}>
+            <MaterialIcons name="fiber-manual-record" size={10} color={withAlpha(settings.launcherColor, '44')} />
+          </Pressable>
+          <Pressable onPress={() => router.push('/(tabs)/two')}>
+            <MaterialIcons name="fiber-manual-record" size={10} color={settings.launcherColor} />
+          </Pressable>
+        </View>
       </View>
     </View>
   );
