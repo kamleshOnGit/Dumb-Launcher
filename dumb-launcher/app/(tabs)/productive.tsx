@@ -58,6 +58,8 @@ interface TaskItem {
 
 export default function ProductiveScreen() {
   const { currentTime, settings } = useLauncherMode();
+  const surfaceAlpha = settings.surfaceOpacity.toString(16).padStart(2, '0');
+  const subtleSurfaceAlpha = Math.max(4, Math.round(settings.surfaceOpacity * 1.3)).toString(16).padStart(2, '0');
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [favoriteContacts, setFavoriteContacts] = useState<FavoriteContact[]>([]);
   const [musicInfo, setMusicInfo] = useState<MusicInfo>({
@@ -233,6 +235,17 @@ export default function ProductiveScreen() {
             isFavorite: Boolean(contact.isFavorite),
           }));
 
+        const selectedContacts = settings.favoriteContactIds.length
+          ? settings.favoriteContactIds
+              .map((contactId) => normalizedContacts.find((contact: FavoriteContact) => contact.id === contactId))
+              .filter(Boolean) as FavoriteContact[]
+          : [];
+
+        if (selectedContacts.length > 0) {
+          setFavoriteContacts(selectedContacts.slice(0, 3));
+          return;
+        }
+
         const favoriteFirst = normalizedContacts
           .sort((a: FavoriteContact, b: FavoriteContact) => Number(Boolean(b.isFavorite)) - Number(Boolean(a.isFavorite)))
           .slice(0, 3);
@@ -257,7 +270,7 @@ export default function ProductiveScreen() {
     };
 
     loadContacts();
-  }, []);
+  }, [settings.favoriteContactIds]);
 
   const launchApp = async (scheme: string, name: string) => {
     try {
@@ -473,7 +486,7 @@ export default function ProductiveScreen() {
       <View
         className="mb-5 rounded-[28px] px-5 py-5"
         style={{
-          backgroundColor: withAlpha('#0f172a', '14'),
+          backgroundColor: withAlpha('#0f172a', surfaceAlpha),
           borderWidth: 1,
           borderColor: withAlpha(settings.launcherColor, '22'),
         }}
@@ -483,7 +496,7 @@ export default function ProductiveScreen() {
             <Text className="text-xl font-medium text-white">{productiveSummary}</Text>
             <Text className="mt-1 text-sm text-zinc-300">Focused launcher dashboard</Text>
           </View>
-          <View className="rounded-full px-3 py-2" style={{ backgroundColor: withAlpha(settings.launcherColor, '18') }}>
+          <View className="rounded-full px-3 py-2" style={{ backgroundColor: withAlpha(settings.launcherColor, subtleSurfaceAlpha) }}>
             <Text className="text-xs uppercase tracking-[2px]" style={{ color: settings.launcherColor }}>
               {nextFocusWindowLabel}
             </Text>
@@ -496,7 +509,7 @@ export default function ProductiveScreen() {
           onPress={openCalendarApp}
           className="w-full rounded-[28px] px-5 py-5"
           style={{
-            backgroundColor: withAlpha('#111827', '14'),
+            backgroundColor: withAlpha('#111827', surfaceAlpha),
             borderWidth: 1,
             borderColor: withAlpha(settings.launcherColor, '22'),
           }}
@@ -516,7 +529,7 @@ export default function ProductiveScreen() {
 
           {calendarEvents.length > 0 ? (
             calendarEvents.slice(0, 3).map((event) => (
-              <View key={event.id} className="mb-3 flex-row items-center gap-3 rounded-2xl px-3 py-3" style={{ backgroundColor: withAlpha('#020617', '30') }}>
+              <View key={event.id} className="mb-3 flex-row items-center gap-3 rounded-2xl px-3 py-3" style={{ backgroundColor: withAlpha('#020617', subtleSurfaceAlpha) }}>
                 <View className="h-2 w-2 rounded-full" style={{ backgroundColor: settings.launcherColor }} />
                 <View className="flex-1">
                   <Text className="text-sm font-medium text-white">{event.title}</Text>
@@ -590,7 +603,7 @@ export default function ProductiveScreen() {
                 key={task.id}
                 onPress={() => toggleTask(task.id)}
                 className="flex-row items-center gap-3 rounded-2xl px-4 py-3"
-                style={{ backgroundColor: withAlpha('#020617', '18') }}
+                style={{ backgroundColor: withAlpha('#020617', subtleSurfaceAlpha) }}
               >
                 <MaterialIcons
                   name={task.completed ? 'check-circle' : 'radio-button-unchecked'}

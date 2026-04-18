@@ -13,9 +13,11 @@ export interface LauncherSettings {
   peekMinutes: number;
   focusPeekApps: string[];
   productivePeekApps: string[];
+  favoriteContactIds: string[];
   launcherColor: string;
   launcherIcon: string;
   wallpaperUri: string | null;
+  surfaceOpacity: number;
   followSystemTheme: boolean;
   followSystemFont: boolean;
   followSystemWallpaper: boolean;
@@ -42,9 +44,11 @@ const defaultSettings: LauncherSettings = {
   peekMinutes: 5,
   focusPeekApps: ['Slack', 'Messages'],
   productivePeekApps: ['Netflix'],
+  favoriteContactIds: [],
   launcherColor: '#3B82F6',
   launcherIcon: 'apps',
   wallpaperUri: null,
+  surfaceOpacity: 14,
   followSystemTheme: true,
   followSystemFont: true,
   followSystemWallpaper: true,

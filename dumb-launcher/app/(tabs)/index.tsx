@@ -11,6 +11,8 @@ export default function TabOneScreen() {
   const { mode, setMode, canUseRelax, canUseProductivePeek, isWeekend, productivePeekEndsAt, currentTime, settings } = useLauncherMode();
 
   const withAlpha = (hex: string, alpha: string) => `${hex}${alpha}`;
+  const surfaceAlpha = settings.surfaceOpacity.toString(16).padStart(2, '0');
+  const subtleSurfaceAlpha = Math.max(4, Math.round(settings.surfaceOpacity * 0.7)).toString(16).padStart(2, '0');
   const hours = currentTime.getHours() % 12;
   const minutes = currentTime.getMinutes();
   const seconds = currentTime.getSeconds();
@@ -63,6 +65,12 @@ export default function TabOneScreen() {
         }
 
         const androidApps = await InstalledApps.getSortedApps({ includeVersion: false, includeAccentColor: false });
+        const exactMatch = androidApps.find((installedApp) => installedApp.label.toLowerCase() === 'camera');
+        if (exactMatch?.packageName) {
+          await RNLauncherKitHelper.launchApplication(exactMatch.packageName);
+          return;
+        }
+
         const cameraApp = androidApps.find((installedApp) =>
           installedApp.label.toLowerCase().includes('camera') ||
           installedApp.packageName.toLowerCase().includes('camera') ||
@@ -183,7 +191,7 @@ export default function TabOneScreen() {
       <View className="mb-12 items-center justify-center">
         <View
           className="mb-6 h-56 w-56 items-center justify-center rounded-full border"
-          style={{ borderColor: withAlpha(settings.launcherColor, '40'), backgroundColor: withAlpha(settings.launcherColor, '08') }}
+          style={{ borderColor: withAlpha(settings.launcherColor, subtleSurfaceAlpha), backgroundColor: withAlpha(settings.launcherColor, Math.max(2, Math.round(settings.surfaceOpacity * 0.55)).toString(16).padStart(2, '0')) }}
         >
           {[0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330].map((rotation) => (
             <View
@@ -221,7 +229,7 @@ export default function TabOneScreen() {
         <Text className="text-zinc-500 text-lg text-center">
           {formatDate(currentTime)}
         </Text>
-        <View className={`mt-4 rounded-full border px-4 py-2 ${modeConfig.pill}`} style={{ borderColor: withAlpha(settings.launcherColor, '40'), backgroundColor: withAlpha(settings.launcherColor, '10') }}>
+        <View className={`mt-4 rounded-full border px-4 py-2 ${modeConfig.pill}`} style={{ borderColor: withAlpha(settings.launcherColor, subtleSurfaceAlpha), backgroundColor: withAlpha(settings.launcherColor, Math.max(4, Math.round(settings.surfaceOpacity * 0.75)).toString(16).padStart(2, '0')) }}>
           <Text className="text-xs uppercase tracking-[3px]" style={{ color: settings.launcherColor }}>
             {modeConfig.label}
           </Text>
@@ -236,7 +244,7 @@ export default function TabOneScreen() {
             onPress={() => launchApp(app)}
             className="mb-4 flex-row items-center gap-4"
           >
-            <View className="h-14 w-14 items-center justify-center rounded-2xl" style={{ backgroundColor: withAlpha(settings.launcherColor, '12') }}>
+            <View className="h-14 w-14 items-center justify-center rounded-2xl" style={{ backgroundColor: withAlpha(settings.launcherColor, surfaceAlpha) }}>
               <MaterialIcons name={app.icon} size={26} color={settings.launcherColor} />
             </View>
             <Text className="text-2xl font-light" style={{ color: settings.launcherColor }}>
@@ -258,7 +266,7 @@ export default function TabOneScreen() {
               className={`flex-1 rounded-2xl border px-4 py-3 ${
                 isActive ? 'border-white bg-white/15' : 'border-white/10 bg-white/5'
               } ${isDisabled ? 'opacity-40' : 'opacity-100'}`}
-              style={isActive ? { borderColor: settings.launcherColor, backgroundColor: withAlpha(settings.launcherColor, '14') } : undefined}
+              style={isActive ? { borderColor: settings.launcherColor, backgroundColor: withAlpha(settings.launcherColor, surfaceAlpha) } : undefined}
             >
               <Text className="text-center text-sm font-medium text-white">
                 {modeOption}

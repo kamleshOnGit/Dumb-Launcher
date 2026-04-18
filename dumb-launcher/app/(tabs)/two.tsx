@@ -16,6 +16,13 @@ const ImagePickerModule = (() => {
     return null;
   }
 })();
+const ContactsModule = (() => {
+  try {
+    return require('expo-contacts');
+  } catch {
+    return null;
+  }
+})();
 const SYSTEM_SHORTCUTS = [
   { key: 'wallpaper', label: 'Wallpaper', action: 'android.settings.WALLPAPER_SETTINGS', fallback: 'app-settings:' },
   { key: 'display', label: 'Display', action: 'android.settings.DISPLAY_SETTINGS', fallback: 'app-settings:' },
@@ -71,12 +78,19 @@ type DeviceApp = {
   accentColor?: string;
 };
 
+type DeviceContact = {
+  id: string;
+  name: string;
+  phone?: string;
+};
+
 export default function TabTwoScreen() {
   const { mode, currentTime, settings, updateSettings, canPeekApp } = useLauncherMode();
   const [search, setSearch] = useState('');
   const [showSettings, setShowSettings] = useState(false);
-  const [activePicker, setActivePicker] = useState<'focusPeekApps' | 'productivePeekApps' | null>(null);
+  const [activePicker, setActivePicker] = useState<'focusPeekApps' | 'productivePeekApps' | 'favoriteContactIds' | null>(null);
   const [installedApps, setInstalledApps] = useState<DeviceApp[]>([]);
+  const [contacts, setContacts] = useState<DeviceContact[]>([]);
   const [isLoadingApps, setIsLoadingApps] = useState(Platform.OS === 'android');
 
   const formatTime = (date: Date) => {
@@ -144,6 +158,53 @@ export default function TabTwoScreen() {
     };
 
     loadInstalledApps();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadContacts = async () => {
+      if (!ContactsModule) {
+        return;
+      }
+
+      try {
+        const permission = await ContactsModule.requestPermissionsAsync();
+
+        if (permission.status !== 'granted' || !isMounted) {
+          return;
+        }
+
+        const response = await ContactsModule.getContactsAsync({
+          fields: [ContactsModule.Fields.PhoneNumbers],
+          sort: ContactsModule.SortTypes.FirstName,
+        });
+
+        if (!isMounted) {
+          return;
+        }
+
+        const normalizedContacts = response.data
+          .filter((contact: { name?: string }) => !!contact.name)
+          .map((contact: { id: string; name?: string; phoneNumbers?: Array<{ number?: string }> }) => ({
+            id: contact.id,
+            name: contact.name || 'Unknown',
+            phone: contact.phoneNumbers?.[0]?.number,
+          }));
+
+        setContacts(normalizedContacts);
+      } catch (error) {
+        if (isMounted) {
+          setContacts([]);
+        }
+      }
+    };
+
+    loadContacts();
 
     return () => {
       isMounted = false;
@@ -218,6 +279,19 @@ export default function TabTwoScreen() {
 
     updateSettings({ [key]: nextApps } as Pick<typeof settings, typeof key>);
   };
+
+  const toggleFavoriteContact = (contactId: string) => {
+    const alreadySelected = settings.favoriteContactIds.includes(contactId);
+    const nextIds = alreadySelected
+      ? settings.favoriteContactIds.filter((item) => item !== contactId)
+      : [...settings.favoriteContactIds, contactId].slice(0, 3);
+
+    updateSettings({ favoriteContactIds: nextIds });
+  };
+
+  const selectedContactNames = settings.favoriteContactIds
+    .map((contactId) => contacts.find((contact) => contact.id === contactId)?.name)
+    .filter(Boolean) as string[];
 
   const openSystemShortcut = async (action: string, fallback: string) => {
     try {
@@ -365,6 +439,22 @@ export default function TabTwoScreen() {
               />
             </View>
 
+            <Text className="mb-2 text-xs uppercase tracking-[2px] text-zinc-500">Surface opacity</Text>
+            <View className="mb-4 rounded-2xl bg-zinc-900 px-4 py-3">
+              <Text className="mb-2 text-xs text-zinc-500">Cards, buttons and clock tint (4-32)</Text>
+              <TextInput
+                value={String(settings.surfaceOpacity)}
+                onChangeText={(value) => {
+                  const parsed = Number(value);
+                  if (!Number.isNaN(parsed) && parsed >= 4 && parsed <= 32) {
+                    updateSettings({ surfaceOpacity: parsed });
+                  }
+                }}
+                keyboardType="number-pad"
+                className="text-white"
+              />
+            </View>
+
             {[
               ['focusPeekApps', 'Focus peek apps'],
               ['productivePeekApps', 'Productive entertainment peek apps'],
@@ -408,6 +498,44 @@ export default function TabTwoScreen() {
                 </View>
               );
             })}
+
+            <View className="mb-4 rounded-2xl bg-zinc-900 px-4 py-3">
+              <Pressable onPress={() => setActivePicker((current) => current === 'favoriteContactIds' ? null : 'favoriteContactIds')} className="flex-row items-center justify-between">
+                <View className="flex-1 pr-4">
+                  <Text className="mb-2 text-xs text-zinc-500">Favorite contacts</Text>
+                  <Text className="text-sm text-white">{selectedContactNames.length ? selectedContactNames.join(', ') : 'Select up to 3 contacts'}</Text>
+                </View>
+                <MaterialIcons name={activePicker === 'favoriteContactIds' ? 'keyboard-arrow-up' : 'keyboard-arrow-down'} size={20} color={settings.launcherColor} />
+              </Pressable>
+
+              {activePicker === 'favoriteContactIds' && (
+                <View className="mt-4 flex-row flex-wrap gap-2">
+                  {contacts.length ? contacts.map((contact) => {
+                    const isSelected = settings.favoriteContactIds.includes(contact.id);
+                    const maxReached = !isSelected && settings.favoriteContactIds.length >= 3;
+
+                    return (
+                      <Pressable
+                        key={contact.id}
+                        onPress={() => toggleFavoriteContact(contact.id)}
+                        disabled={maxReached}
+                        className="flex-row items-center gap-2 rounded-2xl border px-3 py-2"
+                        style={{
+                          borderColor: isSelected ? settings.launcherColor : '#27272a',
+                          backgroundColor: isSelected ? withAlpha(settings.launcherColor, '22') : '#18181b',
+                          opacity: maxReached ? 0.45 : 1,
+                        }}
+                      >
+                        <MaterialIcons name="person" size={16} color={isSelected ? settings.launcherColor : '#a1a1aa'} />
+                        <Text className="text-sm" style={{ color: isSelected ? '#ffffff' : '#d4d4d8' }}>{contact.name}</Text>
+                      </Pressable>
+                    );
+                  }) : (
+                    <Text className="text-sm text-zinc-500">Allow contacts permission to choose favorites.</Text>
+                  )}
+                </View>
+              )}
+            </View>
 
             <Text className="mb-2 text-xs uppercase tracking-[2px] text-zinc-500">Launcher color</Text>
             <View className="mb-4 flex-row gap-2">
