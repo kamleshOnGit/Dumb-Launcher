@@ -1,27 +1,26 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, Pressable, Alert, ScrollView, PanResponder, Platform, PermissionsAndroid } from 'react-native';
+import { View, Text, Pressable, Alert, ScrollView, PanResponder, Platform, PermissionsAndroid, ImageBackground } from 'react-native';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { Linking } from 'react-native';
 import { router } from 'expo-router';
 import { useLauncherMode } from '../../src/hooks/useLauncherMode';
-import { ALL_LAUNCHER_APPS, PRODUCTIVE_LAUNCHER_APP_NAMES } from '../../src/constants/launcherApps';
 import { InstalledApps, RNLauncherKitHelper } from 'react-native-launcher-kit';
 
 const withAlpha = (hex: string, alpha: string) => `${hex}${alpha}`;
-
-// Get Material icon for any app name
-const getMaterialIconForApp = (appName: string): React.ComponentProps<typeof MaterialIcons>['name'] => {
-  const nameLower = appName.toLowerCase();
-  if (nameLower.includes('music') || nameLower.includes('spotify') || nameLower.includes('player')) return 'music-note';
-  if (nameLower.includes('calendar')) return 'event';
-  if (nameLower.includes('mail') || nameLower.includes('email') || nameLower.includes('gmail')) return 'email';
-  if (nameLower.includes('contact')) return 'contacts';
-  if (nameLower.includes('message') || nameLower.includes('sms')) return 'message';
-  if (nameLower.includes('camera')) return 'camera-alt';
-  if (nameLower.includes('phone') || nameLower.includes('dial')) return 'phone';
-  if (nameLower.includes('clock') || nameLower.includes('alarm')) return 'access-time';
-  return 'apps';
-};
+const CalendarModule = (() => {
+  try {
+    return require('expo-calendar');
+  } catch {
+    return null;
+  }
+})();
+const ContactsModule = (() => {
+  try {
+    return require('expo-contacts');
+  } catch {
+    return null;
+  }
+})();
 
 interface CalendarEvent {
   id: string;
@@ -34,6 +33,7 @@ interface FavoriteContact {
   id: string;
   name: string;
   phone?: string;
+  isFavorite?: boolean;
 }
 
 interface MusicInfo {
@@ -47,6 +47,13 @@ interface EmailInfo {
   unreadCount: number;
   lastSender: string;
   subject: string;
+  appName: string;
+}
+
+interface TaskItem {
+  id: string;
+  title: string;
+  completed: boolean;
 }
 
 export default function ProductiveScreen() {
@@ -62,14 +69,15 @@ export default function ProductiveScreen() {
   const [emailInfo, setEmailInfo] = useState<EmailInfo>({
     unreadCount: 0,
     lastSender: '',
-    subject: 'No new emails'
+    subject: 'Open your mail app',
+    appName: 'Email'
   });
+  const [tasks, setTasks] = useState<TaskItem[]>([
+    { id: '1', title: 'Check upcoming meetings', completed: false },
+    { id: '2', title: 'Reply to priority messages', completed: false },
+    { id: '3', title: 'Review today plan', completed: true },
+  ]);
   const [installedApps, setInstalledApps] = useState<{packageName: string; label: string}[]>([]);
-
-  const productiveApps = useMemo(
-    () => ALL_LAUNCHER_APPS.filter((app) => PRODUCTIVE_LAUNCHER_APP_NAMES.includes(app.name)),
-    []
-  );
 
   const swipeResponder = useMemo(
     () => PanResponder.create({
@@ -85,9 +93,61 @@ export default function ProductiveScreen() {
 
   // Load dynamic data
   useEffect(() => {
-    // Calendar events - placeholder for real calendar API integration
-    // To get real events, need to integrate with Android Calendar API or Google Calendar
-    setCalendarEvents([]);
+    const loadCalendarEvents = async () => {
+      try {
+        if (!CalendarModule) {
+          setCalendarEvents([]);
+          return;
+        }
+
+        const permission = await CalendarModule.requestCalendarPermissionsAsync();
+
+        if (permission.status !== 'granted') {
+          setCalendarEvents([]);
+          return;
+        }
+
+        const calendars = await CalendarModule.getCalendarsAsync(CalendarModule.EntityTypes.EVENT);
+        const calendarIds = calendars
+          .filter((calendar: { allowsModifications?: boolean; isPrimary?: boolean }) => calendar.allowsModifications || calendar.isPrimary)
+          .map((calendar: { id: string }) => calendar.id);
+
+        if (!calendarIds.length) {
+          setCalendarEvents([]);
+          return;
+        }
+
+        const start = new Date();
+        start.setHours(0, 0, 0, 0);
+
+        const end = new Date();
+        end.setDate(end.getDate() + 7);
+        end.setHours(23, 59, 59, 999);
+
+        const events = await CalendarModule.getEventsAsync(calendarIds, start, end);
+        const sortedEvents = events
+          .filter((event: { startDate?: string }) => event.startDate)
+          .sort((a: { startDate: string }, b: { startDate: string }) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime())
+          .slice(0, 3)
+          .map((event: { id: string; title?: string; startDate: string }) => {
+            const startDate = new Date(event.startDate);
+            const eventDate = startDate.toDateString() === new Date().toDateString()
+              ? 'Today'
+              : startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+            return {
+              id: event.id,
+              title: event.title || 'Untitled event',
+              time: startDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
+              date: eventDate,
+            };
+          });
+
+        setCalendarEvents(sortedEvents);
+      } catch (error) {
+        setCalendarEvents([]);
+      }
+    };
 
     // Load installed apps to find music/email apps
     const loadApps = async () => {
@@ -124,12 +184,13 @@ export default function ProductiveScreen() {
     };
 
     loadApps();
+    loadCalendarEvents();
 
     // Request contacts permission and load favorites on Android
     const loadContacts = async () => {
-      if (Platform.OS === 'android') {
-        try {
-          const granted = await PermissionsAndroid.request(
+      try {
+        if (Platform.OS === 'android') {
+          await PermissionsAndroid.request(
             PermissionsAndroid.PERMISSIONS.READ_CONTACTS,
             {
               title: 'Contacts Permission',
@@ -137,19 +198,61 @@ export default function ProductiveScreen() {
               buttonPositive: 'OK',
             }
           );
-          if (granted === PermissionsAndroid.RESULTS.GRANTED) {
-            // Try to load real starred/favorite contacts from device
-            // Note: Requires native module integration for full Contacts API access
-            // For now, show placeholder that real data is expected
-            setFavoriteContacts([
-              { id: '1', name: 'Favorite 1', phone: '' },
-              { id: '2', name: 'Favorite 2', phone: '' },
-              { id: '3', name: 'Favorite 3', phone: '' },
-            ]);
-          }
-        } catch (e) {
-          console.log('Contacts permission denied');
         }
+
+        if (!ContactsModule) {
+          setFavoriteContacts([
+            { id: '1', name: 'Mom', phone: '' },
+            { id: '2', name: 'Dad', phone: '' },
+            { id: '3', name: 'Work', phone: '' },
+          ]);
+          return;
+        }
+
+        const permission = await ContactsModule.requestPermissionsAsync();
+        if (permission.status !== 'granted') {
+          setFavoriteContacts([
+            { id: '1', name: 'Mom', phone: '' },
+            { id: '2', name: 'Dad', phone: '' },
+            { id: '3', name: 'Work', phone: '' },
+          ]);
+          return;
+        }
+
+        const response = await ContactsModule.getContactsAsync({
+          fields: [ContactsModule.Fields.PhoneNumbers],
+          sort: ContactsModule.SortTypes.FirstName,
+        });
+
+        const normalizedContacts = response.data
+          .filter((contact: { name?: string }) => !!contact.name)
+          .map((contact: { id: string; name?: string; phoneNumbers?: Array<{ number?: string }>; isFavorite?: boolean }) => ({
+            id: contact.id,
+            name: contact.name || 'Unknown',
+            phone: contact.phoneNumbers?.[0]?.number,
+            isFavorite: Boolean(contact.isFavorite),
+          }));
+
+        const favoriteFirst = normalizedContacts
+          .sort((a: FavoriteContact, b: FavoriteContact) => Number(Boolean(b.isFavorite)) - Number(Boolean(a.isFavorite)))
+          .slice(0, 3);
+
+        if (favoriteFirst.length > 0) {
+          setFavoriteContacts(favoriteFirst);
+          return;
+        }
+
+        setFavoriteContacts([
+          { id: '1', name: 'Mom', phone: '' },
+          { id: '2', name: 'Dad', phone: '' },
+          { id: '3', name: 'Work', phone: '' },
+        ]);
+      } catch (e) {
+        setFavoriteContacts([
+          { id: '1', name: 'Mom', phone: '' },
+          { id: '2', name: 'Dad', phone: '' },
+          { id: '3', name: 'Work', phone: '' },
+        ]);
       }
     };
 
@@ -160,7 +263,7 @@ export default function ProductiveScreen() {
     try {
       // For Camera on Android, use package name if available
       if (name === 'Camera' && Platform.OS === 'android') {
-        const cameraPackages = ['com.android.camera', 'com.google.android.GoogleCamera', 'com.samsung.android.camera'];
+        const cameraPackages = ['com.android.camera', 'com.google.android.GoogleCamera', 'com.samsung.android.camera', 'org.lineageos.snap'];
         for (const pkg of cameraPackages) {
           try {
             await RNLauncherKitHelper.launchApplication(pkg);
@@ -168,6 +271,18 @@ export default function ProductiveScreen() {
           } catch (e) {
             continue;
           }
+        }
+
+        const cameraApp = installedApps.find(a =>
+          a.label.toLowerCase().includes('camera') ||
+          a.packageName?.includes('camera') ||
+          a.packageName?.includes('gcam') ||
+          a.packageName?.includes('snap')
+        );
+
+        if (cameraApp?.packageName) {
+          await RNLauncherKitHelper.launchApplication(cameraApp.packageName);
+          return;
         }
       }
 
@@ -219,6 +334,10 @@ export default function ProductiveScreen() {
     }
   };
 
+  const toggleTask = (taskId: string) => {
+    setTasks((current) => current.map((task) => task.id === taskId ? { ...task, completed: !task.completed } : task));
+  };
+
   const openMusicApp = async () => {
     const musicApps = ['com.spotify.music', 'com.google.android.apps.youtube.music', 'com.android.music', 'com.samsung.android.app.music'];
     for (const pkg of musicApps) {
@@ -229,7 +348,7 @@ export default function ProductiveScreen() {
         continue;
       }
     }
-    Alert.alert('No music app found', 'Install a music app to use this widget');
+    Alert.alert('Music unavailable', 'No music app could be opened on this device.');
   };
 
   const openEmailApp = async () => {
@@ -299,10 +418,32 @@ export default function ProductiveScreen() {
     }
   };
 
+  const productiveSummary = useMemo(() => {
+    const hours = currentTime.getHours();
+
+    if (hours < 12) {
+      return 'Morning reset';
+    }
+
+    if (hours < 18) {
+      return 'Afternoon execution';
+    }
+
+    return 'Evening wrap-up';
+  }, [currentTime]);
+
+  const nextFocusWindowLabel = `${String(currentTime.getHours()).padStart(2, '0')}:${String(currentTime.getMinutes()).padStart(2, '0')} now`;
+
   return (
+    <ImageBackground
+      source={settings.wallpaperUri ? { uri: settings.wallpaperUri } : undefined}
+      resizeMode="cover"
+      className="flex-1"
+      imageStyle={{ opacity: settings.wallpaperUri ? 0.85 : 1 }}
+    >
     <ScrollView
-      className="flex-1 bg-black px-6 pt-16"
-      style={{ backgroundColor: 'transparent' }}
+      className="flex-1 px-6 pt-16"
+      style={{ backgroundColor: settings.wallpaperUri ? 'rgba(0,0,0,0.12)' : 'transparent' }}
       contentContainerStyle={{ paddingBottom: 40 }}
       {...swipeResponder.panHandlers}
     >
@@ -326,185 +467,184 @@ export default function ProductiveScreen() {
         </Text>
       </View>
 
-      {/* Music Widget */}
-      <Pressable onPress={openMusicApp} className="mb-4 w-full">
-        <View
-          className="rounded-3xl border p-5 min-h-[140px]"
-          style={{
-            borderColor: withAlpha(settings.launcherColor, '44'),
-            backgroundColor: withAlpha(settings.launcherColor, '18'),
-          }}
-        >
-          <View className="flex-row items-center justify-between mb-4">
-            <View className="h-12 w-12 items-center justify-center rounded-2xl bg-black/20">
-              <MaterialIcons name="music-note" size={24} color={settings.launcherColor} />
-            </View>
-            <View className="flex-row items-center gap-2">
-              {musicInfo.isPlaying && (
-                <View className="flex-row gap-0.5">
-                  <View className="w-1 h-4 bg-white rounded-full animate-pulse" />
-                  <View className="w-1 h-6 bg-white rounded-full animate-pulse" />
-                  <View className="w-1 h-3 bg-white rounded-full animate-pulse" />
-                </View>
-              )}
-              <MaterialIcons name={musicInfo.isPlaying ? 'pause' : 'play-arrow'} size={20} color={settings.launcherColor} />
-            </View>
-          </View>
-          <Text className="text-xl font-medium text-white">{musicInfo.track}</Text>
-          <Text className="mt-1 text-sm text-zinc-300">{musicInfo.artist}</Text>
-          <Text className="mt-2 text-xs uppercase tracking-[2px] text-zinc-400">{musicInfo.appName}</Text>
-        </View>
-      </Pressable>
+      <Text className="mb-3 text-xs uppercase tracking-[3px] text-zinc-500">Daily dashboard</Text>
+      <Text className="mb-6 text-sm text-zinc-400">Shortcuts for your day.</Text>
 
-      {/* Calendar Widget */}
-      <Pressable onPress={openCalendarApp} className="mb-4 w-full">
-        <View
-          className="rounded-3xl border p-5"
+      <View
+        className="mb-5 rounded-[28px] px-5 py-5"
+        style={{
+          backgroundColor: withAlpha('#0f172a', '14'),
+          borderWidth: 1,
+          borderColor: withAlpha(settings.launcherColor, '22'),
+        }}
+      >
+        <View className="mb-4 flex-row items-start justify-between">
+          <View>
+            <Text className="text-xl font-medium text-white">{productiveSummary}</Text>
+            <Text className="mt-1 text-sm text-zinc-300">Focused launcher dashboard</Text>
+          </View>
+          <View className="rounded-full px-3 py-2" style={{ backgroundColor: withAlpha(settings.launcherColor, '18') }}>
+            <Text className="text-xs uppercase tracking-[2px]" style={{ color: settings.launcherColor }}>
+              {nextFocusWindowLabel}
+            </Text>
+          </View>
+        </View>
+      </View>
+
+      <View className="mb-5 flex-row flex-wrap justify-between gap-y-4">
+        <Pressable
+          onPress={openCalendarApp}
+          className="w-full rounded-[28px] px-5 py-5"
           style={{
-            borderColor: withAlpha(settings.launcherColor, '44'),
-            backgroundColor: withAlpha(settings.launcherColor, '12'),
+            backgroundColor: withAlpha('#111827', '14'),
+            borderWidth: 1,
+            borderColor: withAlpha(settings.launcherColor, '22'),
           }}
         >
-          <View className="flex-row items-center gap-3 mb-4">
-            <View className="h-12 w-12 items-center justify-center rounded-2xl bg-black/20">
-              <MaterialIcons name="event" size={24} color={settings.launcherColor} />
+          <View className="mb-4 flex-row items-center justify-between">
+            <View className="flex-row items-center gap-3">
+              <View className="h-12 w-12 items-center justify-center rounded-2xl" style={{ backgroundColor: withAlpha(settings.launcherColor, '18') }}>
+                <MaterialIcons name="event" size={24} color={settings.launcherColor} />
+              </View>
+              <View>
+                <Text className="text-lg font-medium text-white">Agenda</Text>
+                <Text className="text-xs uppercase tracking-[2px] text-zinc-400">Calendar module</Text>
+              </View>
             </View>
-            <View>
-              <Text className="text-lg font-medium text-white">Calendar</Text>
-              <Text className="text-xs text-zinc-400">{calendarEvents.length} events today</Text>
-            </View>
+            <MaterialIcons name="open-in-new" size={18} color={withAlpha(settings.launcherColor, 'aa')} />
           </View>
+
           {calendarEvents.length > 0 ? (
-            calendarEvents.map(event => (
-              <View key={event.id} className="flex-row items-center gap-3 py-2 border-t border-white/5">
-                <View className="w-2 h-2 rounded-full" style={{ backgroundColor: settings.launcherColor }} />
+            calendarEvents.slice(0, 3).map((event) => (
+              <View key={event.id} className="mb-3 flex-row items-center gap-3 rounded-2xl px-3 py-3" style={{ backgroundColor: withAlpha('#020617', '30') }}>
+                <View className="h-2 w-2 rounded-full" style={{ backgroundColor: settings.launcherColor }} />
                 <View className="flex-1">
-                  <Text className="text-white">{event.title}</Text>
-                  <Text className="text-xs text-zinc-400">{event.time}</Text>
+                  <Text className="text-sm font-medium text-white">{event.title}</Text>
+                  <Text className="mt-1 text-xs text-zinc-400">{event.time} • {event.date}</Text>
                 </View>
               </View>
             ))
           ) : (
-            <View className="border-t border-white/5 pt-3">
-              <Text className="text-zinc-500 text-sm">Tap to connect calendar</Text>
-              <Text className="text-xs text-zinc-600 mt-1">Google Calendar integration coming soon</Text>
+            <View className="rounded-2xl px-4 py-4" style={{ backgroundColor: withAlpha('#020617', '18') }}>
+              <Text className="text-sm text-white">Open Calendar</Text>
             </View>
           )}
-        </View>
-      </Pressable>
+        </Pressable>
 
-      {/* Tasks Widget */}
-      <Pressable onPress={() => Alert.alert('Tasks', 'Google Tasks or Todoist integration coming soon')} className="mb-4 w-full">
-        <View
-          className="rounded-3xl border p-5"
+        <Pressable
+          onPress={openMusicApp}
+          className="w-[48%] rounded-[28px] px-5 py-5"
           style={{
-            borderColor: withAlpha(settings.launcherColor, '44'),
-            backgroundColor: withAlpha(settings.launcherColor, '12'),
+            backgroundColor: withAlpha('#111827', '14'),
+            borderWidth: 1,
+            borderColor: withAlpha(settings.launcherColor, '22'),
           }}
         >
-          <View className="flex-row items-center gap-3">
-            <View className="h-12 w-12 items-center justify-center rounded-2xl bg-black/20">
-              <MaterialIcons name="check-circle" size={24} color={settings.launcherColor} />
-            </View>
-            <View className="flex-1">
-              <Text className="text-lg font-medium text-white">Tasks</Text>
-              <Text className="text-xs text-zinc-400">Connect Google Tasks or Todoist</Text>
-            </View>
-            <MaterialIcons name="add-task" size={20} color={withAlpha(settings.launcherColor, '88')} />
+          <View className="mb-5 h-12 w-12 items-center justify-center rounded-2xl" style={{ backgroundColor: withAlpha(settings.launcherColor, '18') }}>
+            <MaterialIcons name="music-note" size={24} color={settings.launcherColor} />
           </View>
-        </View>
-      </Pressable>
+          <Text className="text-lg font-medium text-white">Music</Text>
+          <Text className="mt-2 text-sm text-zinc-300">Open music app</Text>
+        </Pressable>
 
-      {/* Email Widget */}
-      <Pressable onPress={openEmailApp} className="mb-4 w-full">
-        <View
-          className="rounded-3xl border p-5"
+        <Pressable
+          onPress={openEmailApp}
+          className="w-[48%] rounded-[28px] px-5 py-5"
           style={{
-            borderColor: withAlpha(settings.launcherColor, '44'),
-            backgroundColor: withAlpha(settings.launcherColor, '12'),
+            backgroundColor: withAlpha('#111827', '14'),
+            borderWidth: 1,
+            borderColor: withAlpha(settings.launcherColor, '22'),
           }}
         >
-          <View className="flex-row items-center justify-between mb-3">
+          <View className="mb-5 h-12 w-12 items-center justify-center rounded-2xl" style={{ backgroundColor: withAlpha(settings.launcherColor, '18') }}>
+            <MaterialIcons name="email" size={24} color={settings.launcherColor} />
+          </View>
+          <Text className="text-lg font-medium text-white">Email</Text>
+          <Text className="mt-2 text-sm text-zinc-300">Open email app</Text>
+        </Pressable>
+
+        <View
+          className="w-full rounded-[28px] px-5 py-5"
+          style={{
+            backgroundColor: withAlpha('#111827', '14'),
+            borderWidth: 1,
+            borderColor: withAlpha(settings.launcherColor, '22'),
+          }}
+        >
+          <View className="mb-4 flex-row items-center justify-between">
             <View className="flex-row items-center gap-3">
-              <View className="h-12 w-12 items-center justify-center rounded-2xl bg-black/20">
-                <MaterialIcons name="email" size={24} color={settings.launcherColor} />
+              <View className="h-12 w-12 items-center justify-center rounded-2xl" style={{ backgroundColor: withAlpha(settings.launcherColor, '18') }}>
+                <MaterialIcons name="check-circle" size={24} color={settings.launcherColor} />
               </View>
               <View>
-                <Text className="text-lg font-medium text-white">Email</Text>
-                {emailInfo.unreadCount > 0 && (
-                  <View className="flex-row items-center gap-1">
-                    <View className="w-2 h-2 rounded-full bg-red-500" />
-                    <Text className="text-xs text-zinc-400">{emailInfo.unreadCount} unread</Text>
-                  </View>
-                )}
+                <Text className="text-lg font-medium text-white">Tasks</Text>
+                <Text className="text-xs uppercase tracking-[2px] text-zinc-400">Local focus list</Text>
               </View>
             </View>
-            <MaterialIcons name="open-in-new" size={18} color={withAlpha(settings.launcherColor, '88')} />
+            <Text className="text-xs text-zinc-500">{tasks.filter((task) => !task.completed).length} open</Text>
           </View>
-          {emailInfo.unreadCount > 0 && emailInfo.lastSender && (
-            <View className="border-t border-white/5 pt-3">
-              <Text className="text-sm text-white" numberOfLines={1}>{emailInfo.lastSender}</Text>
-              <Text className="text-xs text-zinc-400" numberOfLines={1}>{emailInfo.subject}</Text>
-            </View>
-          )}
-        </View>
-      </Pressable>
 
-      {/* Favorite Contacts */}
-      <View className="mb-6">
-        <Text className="mb-3 text-xs uppercase tracking-[3px] text-zinc-500">Favorite Contacts</Text>
-        <View className="flex-row flex-wrap justify-between">
-          {favoriteContacts.length > 0 ? (
-            favoriteContacts.map((contact, index) => (
+          <View className="gap-3">
+            {tasks.map((task) => (
+              <Pressable
+                key={task.id}
+                onPress={() => toggleTask(task.id)}
+                className="flex-row items-center gap-3 rounded-2xl px-4 py-3"
+                style={{ backgroundColor: withAlpha('#020617', '18') }}
+              >
+                <MaterialIcons
+                  name={task.completed ? 'check-circle' : 'radio-button-unchecked'}
+                  size={20}
+                  color={task.completed ? settings.launcherColor : '#9ca3af'}
+                />
+                <Text className={`flex-1 text-sm ${task.completed ? 'text-zinc-500' : 'text-white'}`}>
+                  {task.title}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+
+        <View
+          className="w-full rounded-[28px] px-5 py-5"
+          style={{
+            backgroundColor: withAlpha('#111827', '14'),
+            borderWidth: 1,
+            borderColor: withAlpha(settings.launcherColor, '22'),
+          }}
+        >
+          <View className="mb-4 flex-row items-center justify-between">
+            <View className="flex-row items-center gap-3">
+              <View className="h-12 w-12 items-center justify-center rounded-2xl" style={{ backgroundColor: withAlpha(settings.launcherColor, '18') }}>
+                <MaterialIcons name="contacts" size={24} color={settings.launcherColor} />
+              </View>
+              <View>
+                <Text className="text-lg font-medium text-white">Favorite contacts</Text>
+                <Text className="text-xs uppercase tracking-[2px] text-zinc-400">Quick reach</Text>
+              </View>
+            </View>
+            <Text className="text-xs text-zinc-500">3 slots</Text>
+          </View>
+
+          <View className="flex-row justify-between">
+            {favoriteContacts.slice(0, 3).map((contact) => (
               <Pressable
                 key={contact.id}
                 onPress={() => callContact(contact)}
-                className="mb-3 w-[32%]"
+                className="w-[31.5%] rounded-2xl px-3 py-4 items-center"
+                style={{ backgroundColor: withAlpha('#020617', '18') }}
               >
-                <View
-                  className="rounded-2xl border p-4 items-center"
-                  style={{
-                    borderColor: withAlpha(settings.launcherColor, '33'),
-                    backgroundColor: withAlpha(settings.launcherColor, '12'),
-                  }}
-                >
-                  <View className="mb-2 h-12 w-12 items-center justify-center rounded-full bg-black/20">
-                    <MaterialIcons name="person" size={24} color={settings.launcherColor} />
-                  </View>
-                  <Text className="text-sm font-medium text-white text-center" numberOfLines={1}>{contact.name}</Text>
-                  <MaterialIcons name="phone" size={14} color={withAlpha(settings.launcherColor, '88')} className="mt-1" />
+                <View className="mb-3 h-12 w-12 items-center justify-center rounded-full" style={{ backgroundColor: withAlpha(settings.launcherColor, '18') }}>
+                  <MaterialIcons name="person" size={22} color={settings.launcherColor} />
                 </View>
+                <Text className="text-sm font-medium text-white text-center" numberOfLines={1}>{contact.name}</Text>
+                <Text className="mt-1 text-[10px] uppercase tracking-[2px] text-zinc-500">Call</Text>
               </Pressable>
-            ))
-          ) : (
-            <View className="w-full p-4 rounded-2xl border border-white/10 bg-white/5">
-              <Text className="text-zinc-500 text-center">Add favorite contacts to see them here</Text>
-            </View>
-          )}
+            ))}
+          </View>
         </View>
       </View>
-
-      {/* Quick Launch Apps */}
-      <Text className="mb-4 text-xs uppercase tracking-[3px] text-zinc-500">Quick launch</Text>
-      <View className="flex-row flex-wrap justify-between">
-        {productiveApps.map((app, index) => (
-          <Pressable
-            key={app.id}
-            onPress={() => launchApp(app.scheme, app.name)}
-            className={`mb-4 rounded-3xl border p-4 ${index % 3 === 0 ? 'w-full min-h-[100px]' : 'w-[48%] min-h-[100px]'}`}
-            style={{
-              borderColor: withAlpha(settings.launcherColor, '33'),
-              backgroundColor: withAlpha(settings.launcherColor, index % 3 === 0 ? '1f' : '12'),
-            }}
-          >
-            <View className="mb-3 h-10 w-10 items-center justify-center rounded-2xl bg-black/20">
-              <MaterialIcons name={app.icon} size={22} color={settings.launcherColor} />
-            </View>
-            <Text className="text-base font-medium text-white">{app.name}</Text>
-            <Text className="mt-1 text-xs uppercase tracking-[2px] text-zinc-400">{app.category}</Text>
-          </Pressable>
-        ))}
-      </View>
     </ScrollView>
+    </ImageBackground>
   );
 }

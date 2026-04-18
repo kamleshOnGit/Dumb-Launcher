@@ -15,6 +15,7 @@ export interface LauncherSettings {
   productivePeekApps: string[];
   launcherColor: string;
   launcherIcon: string;
+  wallpaperUri: string | null;
   followSystemTheme: boolean;
   followSystemFont: boolean;
   followSystemWallpaper: boolean;
@@ -25,10 +26,13 @@ interface LauncherModeContextValue {
   setMode: (mode: Mode) => boolean;
   forceMode: (mode: Mode) => void;
   isFocusWindow: boolean;
+  isWeekend: boolean;
   currentTime: Date;
   settings: LauncherSettings;
   updateSettings: (updates: Partial<LauncherSettings>) => void;
   canUseRelax: boolean;
+  canUseProductivePeek: boolean;
+  productivePeekEndsAt: Date | null;
   canPeekApp: (appName: string, category: string) => boolean;
 }
 
@@ -40,6 +44,7 @@ const defaultSettings: LauncherSettings = {
   productivePeekApps: ['Netflix'],
   launcherColor: '#3B82F6',
   launcherIcon: 'apps',
+  wallpaperUri: null,
   followSystemTheme: true,
   followSystemFont: true,
   followSystemWallpaper: true,
@@ -53,6 +58,8 @@ export function LauncherModeProvider({ children }: { children: React.ReactNode }
   const [mode, setModeState] = useState<Mode>('Focus');
   const [currentTime, setCurrentTime] = useState(new Date());
   const [settings, setSettings] = useState<LauncherSettings>(defaultSettings);
+  const [productivePeekEndsAtMs, setProductivePeekEndsAtMs] = useState<number | null>(null);
+  const [productivePeekHourKey, setProductivePeekHourKey] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -104,22 +111,77 @@ export function LauncherModeProvider({ children }: { children: React.ReactNode }
     return hours >= settings.focusStartHour && hours < settings.focusEndHour;
   }, [currentTime, settings.focusEndHour, settings.focusStartHour]);
 
+  const isWeekend = useMemo(() => {
+    const day = currentTime.getDay();
+    return day === 0 || day === 6;
+  }, [currentTime]);
+
+  const currentHourKey = useMemo(
+    () => `${currentTime.getFullYear()}-${currentTime.getMonth()}-${currentTime.getDate()}-${currentTime.getHours()}`,
+    [currentTime]
+  );
+
+  const productivePeekEndsAt = useMemo(
+    () => (productivePeekEndsAtMs ? new Date(productivePeekEndsAtMs) : null),
+    [productivePeekEndsAtMs]
+  );
+
+  const isProductivePeekActive = useMemo(
+    () => productivePeekEndsAtMs !== null && productivePeekEndsAtMs > currentTime.getTime(),
+    [productivePeekEndsAtMs, currentTime]
+  );
+
+  const canUseProductivePeek = useMemo(() => {
+    if (isWeekend || !isFocusWindow) {
+      return true;
+    }
+
+    if (isProductivePeekActive) {
+      return true;
+    }
+
+    return productivePeekHourKey !== currentHourKey;
+  }, [currentHourKey, isFocusWindow, isProductivePeekActive, isWeekend, productivePeekHourKey]);
+
   useEffect(() => {
-    if (isFocusWindow && mode === 'Relax') {
+    if (!isWeekend && isFocusWindow && mode === 'Relax') {
       setModeState('Focus');
     }
-  }, [isFocusWindow, mode]);
+
+    if (!isWeekend && isFocusWindow && mode === 'Productive' && productivePeekEndsAtMs !== null && productivePeekEndsAtMs <= currentTime.getTime()) {
+      setModeState('Focus');
+      setProductivePeekEndsAtMs(null);
+    }
+
+    if (productivePeekHourKey && productivePeekHourKey !== currentHourKey && productivePeekEndsAtMs !== null && !isProductivePeekActive) {
+      setProductivePeekEndsAtMs(null);
+    }
+  }, [currentHourKey, currentTime, isFocusWindow, isProductivePeekActive, isWeekend, mode, productivePeekEndsAtMs, productivePeekHourKey]);
 
   const setMode = useCallback(
     (nextMode: Mode) => {
-      if (nextMode === 'Relax' && isFocusWindow) {
+      if (nextMode === 'Relax' && !isWeekend && isFocusWindow) {
         return false;
+      }
+
+      if (nextMode === 'Productive' && !isWeekend && isFocusWindow && !isProductivePeekActive) {
+        if (productivePeekHourKey === currentHourKey) {
+          return false;
+        }
+
+        const endsAt = Date.now() + 5 * 60 * 1000;
+        setProductivePeekHourKey(currentHourKey);
+        setProductivePeekEndsAtMs(endsAt);
+      }
+
+      if (nextMode !== 'Productive' && mode === 'Productive' && !isProductivePeekActive) {
+        setProductivePeekEndsAtMs(null);
       }
 
       setModeState(nextMode);
       return true;
     },
-    [isFocusWindow]
+    [currentHourKey, isFocusWindow, isProductivePeekActive, isWeekend, mode, productivePeekHourKey]
   );
 
   const forceMode = useCallback((nextMode: Mode) => {
@@ -151,13 +213,16 @@ export function LauncherModeProvider({ children }: { children: React.ReactNode }
       setMode,
       forceMode,
       isFocusWindow,
+      isWeekend,
       currentTime,
       settings,
       updateSettings,
-      canUseRelax: !isFocusWindow,
+      canUseRelax: isWeekend || !isFocusWindow,
+      canUseProductivePeek,
+      productivePeekEndsAt,
       canPeekApp,
     }),
-    [mode, setMode, forceMode, isFocusWindow, currentTime, settings, updateSettings, canPeekApp]
+    [mode, setMode, forceMode, isFocusWindow, isWeekend, currentTime, settings, updateSettings, canUseProductivePeek, productivePeekEndsAt, canPeekApp]
   );
 
   return React.createElement(LauncherModeContext.Provider, { value }, children);

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, FlatList, TextInput, TouchableOpacity, Alert, Pressable, ScrollView, Platform, PanResponder, Image } from 'react-native';
+import { View, Text, FlatList, TextInput, TouchableOpacity, Alert, Pressable, ScrollView, Platform, PanResponder, Image, ImageBackground } from 'react-native';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { Linking } from 'react-native';
 import { router } from 'expo-router';
@@ -9,6 +9,13 @@ import { ALL_LAUNCHER_APPS, LauncherApp } from '../../src/constants/launcherApps
 
 const COLOR_OPTIONS = ['#3B82F6', '#10B981', '#8B5CF6', '#F97316', '#EF4444'];
 const ICON_OPTIONS = ['apps', 'home', 'rocket-launch', 'dashboard-customize', 'widgets'];
+const ImagePickerModule = (() => {
+  try {
+    return require('expo-image-picker');
+  } catch {
+    return null;
+  }
+})();
 const SYSTEM_SHORTCUTS = [
   { key: 'wallpaper', label: 'Wallpaper', action: 'android.settings.WALLPAPER_SETTINGS', fallback: 'app-settings:' },
   { key: 'display', label: 'Display', action: 'android.settings.DISPLAY_SETTINGS', fallback: 'app-settings:' },
@@ -19,35 +26,38 @@ const SYSTEM_SHORTCUTS = [
 const withAlpha = (hex: string, alpha: string) => `${hex}${alpha}`;
 
 // Map app names to MaterialIcons for consistent theming
-const getMaterialIconForApp = (appName: string): React.ComponentProps<typeof MaterialIcons>['name'] => {
+const getMaterialIconForApp = (appName: string, packageName?: string): React.ComponentProps<typeof MaterialIcons>['name'] => {
   const nameLower = appName.toLowerCase();
-  if (nameLower.includes('phone') || nameLower.includes('dial')) return 'phone';
-  if (nameLower.includes('message') || nameLower.includes('sms')) return 'message';
-  if (nameLower.includes('contact')) return 'contacts';
-  if (nameLower.includes('camera')) return 'camera-alt';
-  if (nameLower.includes('gallery') || nameLower.includes('photo')) return 'photo-library';
-  if (nameLower.includes('setting')) return 'settings';
-  if (nameLower.includes('calculator')) return 'calculate';
-  if (nameLower.includes('calendar')) return 'calendar-month';
-  if (nameLower.includes('clock') || nameLower.includes('alarm')) return 'access-time';
-  if (nameLower.includes('browser') || nameLower.includes('chrome')) return 'language';
-  if (nameLower.includes('mail') || nameLower.includes('gmail')) return 'email';
-  if (nameLower.includes('map') || nameLower.includes('navigation')) return 'map';
-  if (nameLower.includes('music') || nameLower.includes('spotify')) return 'music-note';
-  if (nameLower.includes('video') || nameLower.includes('youtube') || nameLower.includes('netflix')) return 'play-circle-filled';
-  if (nameLower.includes('file') || nameLower.includes('document')) return 'folder';
-  if (nameLower.includes('note')) return 'note';
-  if (nameLower.includes('weather')) return 'wb-sunny';
-  if (nameLower.includes('shopping') || nameLower.includes('amazon')) return 'shopping-bag';
-  if (nameLower.includes('social') || nameLower.includes('facebook') || nameLower.includes('instagram')) return 'people';
-  if (nameLower.includes('chat') || nameLower.includes('whatsapp') || nameLower.includes('telegram')) return 'chat';
-  if (nameLower.includes('work') || nameLower.includes('slack') || nameLower.includes('teams')) return 'work';
-  if (nameLower.includes('bank') || nameLower.includes('pay') || nameLower.includes('wallet')) return 'account-balance-wallet';
-  if (nameLower.includes('health') || nameLower.includes('fitness')) return 'favorite';
-  if (nameLower.includes('game')) return 'sports-esports';
-  if (nameLower.includes('book') || nameLower.includes('read')) return 'book';
-  if (nameLower.includes('drive') || nameLower.includes('cloud')) return 'cloud';
-  if (nameLower.includes('search') || nameLower.includes('google')) return 'search';
+  const packageLower = (packageName || '').toLowerCase();
+  const combined = `${nameLower} ${packageLower}`;
+
+  if (combined.includes('camera') || combined.includes('gcam')) return 'camera-alt';
+  if (combined.includes('calendar')) return 'calendar-month';
+  if (combined.includes('message') || combined.includes('sms') || combined.includes('messaging')) return 'message';
+  if (combined.includes('contact')) return 'contacts';
+  if (combined.includes('phone') || combined.includes('dialer') || combined.includes('call')) return 'phone';
+  if (combined.includes('gallery') || combined.includes('photo') || combined.includes('photos')) return 'photo-library';
+  if (combined.includes('mail') || combined.includes('gmail') || combined.includes('outlook') || combined.includes('yahoo')) return 'email';
+  if (combined.includes('map') || combined.includes('navigation') || combined.includes('uber') || combined.includes('ola')) return 'map';
+  if (combined.includes('music') || combined.includes('spotify') || combined.includes('wynk') || combined.includes('gaana')) return 'music-note';
+  if (combined.includes('youtube') || combined.includes('netflix') || combined.includes('video') || combined.includes('prime video') || combined.includes('hotstar')) return 'play-circle-filled';
+  if (combined.includes('chrome') || combined.includes('browser') || combined.includes('firefox') || combined.includes('edge')) return 'language';
+  if (combined.includes('setting') || combined.includes('config')) return 'settings';
+  if (combined.includes('calculator')) return 'calculate';
+  if (combined.includes('clock') || combined.includes('alarm')) return 'access-time';
+  if (combined.includes('file') || combined.includes('document') || combined.includes('docs') || combined.includes('drive') || combined.includes('files')) return 'folder';
+  if (combined.includes('note') || combined.includes('keep') || combined.includes('memo')) return 'note';
+  if (combined.includes('weather')) return 'wb-sunny';
+  if (combined.includes('amazon') || combined.includes('flipkart') || combined.includes('myntra') || combined.includes('shopping')) return 'shopping-bag';
+  if (combined.includes('instagram') || combined.includes('facebook') || combined.includes('snapchat') || combined.includes('social')) return 'people';
+  if (combined.includes('whatsapp') || combined.includes('telegram') || combined.includes('signal') || combined.includes('chat')) return 'chat';
+  if (combined.includes('slack') || combined.includes('teams') || combined.includes('meet') || combined.includes('zoom') || combined.includes('work')) return 'work';
+  if (combined.includes('bank') || combined.includes('wallet') || combined.includes('paytm') || combined.includes('phonepe') || combined.includes('gpay') || combined.includes('paypal')) return 'account-balance-wallet';
+  if (combined.includes('health') || combined.includes('fitness')) return 'favorite';
+  if (combined.includes('game') || combined.includes('gaming')) return 'sports-esports';
+  if (combined.includes('book') || combined.includes('kindle') || combined.includes('reader')) return 'book';
+  if (combined.includes('cloud') || combined.includes('dropbox') || combined.includes('onedrive')) return 'cloud';
+  if (combined.includes('search') || combined.includes('google')) return 'search';
   return 'apps';
 };
 
@@ -228,10 +238,73 @@ export default function TabTwoScreen() {
     }
   };
 
+  const pickLauncherWallpaper = async () => {
+    if (!ImagePickerModule) {
+      Alert.alert('Wallpaper picker unavailable', 'Install the image picker dependency and rebuild to use launcher wallpapers.');
+      return;
+    }
+
+    try {
+      const permission = await ImagePickerModule.requestMediaLibraryPermissionsAsync();
+
+      if (permission.status !== 'granted') {
+        Alert.alert('Permission required', 'Allow photo access to choose a launcher wallpaper.');
+        return;
+      }
+
+      const result = await ImagePickerModule.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        quality: 1,
+      });
+
+      if (!result.canceled && result.assets?.[0]?.uri) {
+        updateSettings({ wallpaperUri: result.assets[0].uri, followSystemWallpaper: false });
+      }
+    } catch (error) {
+      Alert.alert('Wallpaper failed', 'Could not choose a launcher wallpaper.');
+    }
+  };
+
+  const clearLauncherWallpaper = () => {
+    updateSettings({ wallpaperUri: null, followSystemWallpaper: true });
+  };
+
+  const renderAppVisual = (item: DeviceApp) => {
+    const isLocked = isAppLocked(item.name, item.category);
+    const tintColor = isLocked ? '#52525b' : settings.launcherColor;
+    const iconValue = typeof item.icon === 'string' ? item.icon : undefined;
+    const looksLikeUri = !!iconValue && (iconValue.startsWith('data:') || iconValue.startsWith('content:') || iconValue.startsWith('file:') || iconValue.startsWith('http'));
+    const imageUri = looksLikeUri ? iconValue : iconValue && iconValue.length > 120 ? `data:image/png;base64,${iconValue}` : null;
+
+    if (imageUri) {
+      return (
+        <View className="h-12 w-12 items-center justify-center rounded-2xl overflow-hidden border" style={{ backgroundColor: isLocked ? '#18181b' : withAlpha(settings.launcherColor, '14'), borderColor: isLocked ? '#27272a' : withAlpha(settings.launcherColor, '35') }}>
+          <Image source={{ uri: imageUri }} style={{ width: 30, height: 30, opacity: isLocked ? 0.4 : 1 }} resizeMode="contain" />
+        </View>
+      );
+    }
+
+    return (
+      <View className="h-12 w-12 items-center justify-center rounded-2xl overflow-hidden" style={{ backgroundColor: isLocked ? '#18181b' : withAlpha(item.accentColor || settings.launcherColor, '22') }}>
+        <MaterialIcons
+          name={getMaterialIconForApp(item.name, item.packageName)}
+          size={24}
+          color={tintColor}
+        />
+      </View>
+    );
+  };
+
   return (
+    <ImageBackground
+      source={settings.wallpaperUri ? { uri: settings.wallpaperUri } : undefined}
+      resizeMode="cover"
+      className="flex-1"
+      imageStyle={{ opacity: settings.wallpaperUri ? 0.85 : 1 }}
+    >
     <View
       className="flex-1 bg-black px-6 pt-16"
-      style={{ backgroundColor: 'transparent' }}
+      style={{ backgroundColor: settings.wallpaperUri ? 'rgba(0,0,0,0.16)' : 'transparent' }}
       {...swipeResponder.panHandlers}
     >
       {/* Header with Real-time Status */}
@@ -244,13 +317,13 @@ export default function TabTwoScreen() {
             {formatTime(currentTime)} • {mode}
           </Text>
         </View>
-        <Pressable onPress={() => setShowSettings((current) => !current)} className="rounded-full border border-white/10 p-3">
+        <Pressable onPress={() => setShowSettings((current) => !current)} className="rounded-full border border-white/10 p-3" style={{ backgroundColor: withAlpha('#020617', '10') }}>
           <MaterialIcons name={settings.launcherIcon as any} size={22} color={settings.launcherColor} />
         </Pressable>
       </View>
 
       {showSettings && (
-        <View className="mb-6 max-h-[420px] rounded-3xl border border-white/10 bg-zinc-950/95 p-5" style={{ borderColor: withAlpha(settings.launcherColor, '55') }}>
+        <View className="mb-6 max-h-[420px] rounded-3xl border border-white/10 bg-zinc-950/95 p-5" style={{ borderColor: withAlpha(settings.launcherColor, '55'), backgroundColor: withAlpha(settings.launcherColor, '10') }}>
           <ScrollView showsVerticalScrollIndicator={false}>
             <Text className="mb-4 text-lg font-medium text-white">Launcher settings</Text>
 
@@ -367,6 +440,26 @@ export default function TabTwoScreen() {
               </View>
             </View>
 
+            <Text className="mb-2 text-xs uppercase tracking-[2px] text-zinc-500">Launcher wallpaper</Text>
+            <View className="mb-4 gap-2">
+              <Pressable
+                onPress={pickLauncherWallpaper}
+                className="rounded-2xl border border-white/10 px-4 py-3"
+                style={{ backgroundColor: withAlpha(settings.launcherColor, '18') }}
+              >
+                <Text className="text-sm text-white">Choose launcher wallpaper</Text>
+              </Pressable>
+              <Pressable
+                onPress={clearLauncherWallpaper}
+                className="rounded-2xl border border-white/10 px-4 py-3 bg-zinc-900"
+              >
+                <Text className="text-sm text-white">Clear custom wallpaper</Text>
+              </Pressable>
+              <Text className="text-xs text-zinc-500">
+                {settings.wallpaperUri ? 'Custom wallpaper active' : 'No custom wallpaper selected'}
+              </Text>
+            </View>
+
             <Text className="mb-2 text-xs uppercase tracking-[2px] text-zinc-500">Launcher icon</Text>
             <View className="mb-4 flex-row flex-wrap gap-2">
               {ICON_OPTIONS.map((icon) => (
@@ -442,13 +535,7 @@ export default function TabTwoScreen() {
             onPress={() => launchApp(item)}
           >
             <View className="flex-row items-center gap-3">
-              <View className="h-12 w-12 items-center justify-center rounded-2xl overflow-hidden" style={{ backgroundColor: isAppLocked(item.name, item.category) ? '#18181b' : withAlpha(item.accentColor || settings.launcherColor, '22') }}>
-                <MaterialIcons
-                  name={getMaterialIconForApp(item.name)}
-                  size={24}
-                  color={isAppLocked(item.name, item.category) ? '#52525b' : item.accentColor || settings.launcherColor}
-                />
-              </View>
+              {renderAppVisual(item)}
               <View>
                 <Text className={`text-xl font-light ${isAppLocked(item.name, item.category) ? 'text-zinc-700' : 'text-zinc-300'}`}>
                   {item.name}
@@ -490,5 +577,6 @@ export default function TabTwoScreen() {
         </View>
       </View>
     </View>
+    </ImageBackground>
   );
 }
