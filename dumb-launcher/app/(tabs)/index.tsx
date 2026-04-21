@@ -11,8 +11,12 @@ export default function TabOneScreen() {
   const { mode, setMode, canUseRelax, canUseProductivePeek, isWeekend, productivePeekEndsAt, currentTime, settings } = useLauncherMode();
 
   const withAlpha = (hex: string, alpha: string) => `${hex}${alpha}`;
-  const surfaceAlpha = settings.surfaceOpacity.toString(16).padStart(2, '0');
-  const subtleSurfaceAlpha = Math.max(4, Math.round(settings.surfaceOpacity * 0.7)).toString(16).padStart(2, '0');
+  const toAlphaHex = (percent: number) => Math.max(0, Math.min(255, Math.round((percent / 100) * 255))).toString(16).padStart(2, '0');
+  const launcherFontStyle = settings.followSystemFont || settings.launcherFontFamily === 'System'
+    ? undefined
+    : { fontFamily: settings.launcherFontFamily };
+  const surfaceAlpha = toAlphaHex(settings.surfaceOpacity);
+  const subtleSurfaceAlpha = toAlphaHex(Math.max(0, settings.surfaceOpacity * 0.7));
   const hours = currentTime.getHours() % 12;
   const minutes = currentTime.getMinutes();
   const seconds = currentTime.getSeconds();
@@ -53,7 +57,7 @@ export default function TabOneScreen() {
   const launchApp = async (app: { name: string; scheme: string }) => {
     try {
       if (Platform.OS === 'android' && app.name === 'Camera') {
-        const cameraPackages = ['com.android.camera', 'com.google.android.GoogleCamera', 'com.samsung.android.camera', 'org.lineageos.snap'];
+        const cameraPackages = ['com.android.camera', 'com.google.android.GoogleCamera', 'com.samsung.android.camera', 'com.sec.android.app.camera', 'com.oplus.camera', 'com.oneplus.camera', 'com.motorola.camera3', 'org.lineageos.snap'];
 
         for (const packageName of cameraPackages) {
           try {
@@ -65,7 +69,7 @@ export default function TabOneScreen() {
         }
 
         const androidApps = await InstalledApps.getSortedApps({ includeVersion: false, includeAccentColor: false });
-        const exactMatch = androidApps.find((installedApp) => installedApp.label.toLowerCase() === 'camera');
+        const exactMatch = androidApps.find((installedApp) => installedApp.label.toLowerCase() === 'camera' || installedApp.label.toLowerCase() === 'camera go');
         if (exactMatch?.packageName) {
           await RNLauncherKitHelper.launchApplication(exactMatch.packageName);
           return;
@@ -103,6 +107,33 @@ export default function TabOneScreen() {
           } catch (error) {
             continue;
           }
+        }
+      }
+
+      if (Platform.OS === 'android' && app.name === 'Contacts') {
+        const contactsPackages = ['com.google.android.contacts', 'com.android.contacts', 'com.samsung.android.contacts', 'com.android.dialer'];
+
+        for (const packageName of contactsPackages) {
+          try {
+            await RNLauncherKitHelper.launchApplication(packageName);
+            return;
+          } catch (error) {
+            continue;
+          }
+        }
+
+        const androidApps = await InstalledApps.getSortedApps({ includeVersion: false, includeAccentColor: false });
+        const contactsApp = androidApps.find((installedApp) =>
+          installedApp.label.toLowerCase() === 'contacts' ||
+          installedApp.label.toLowerCase() === 'phone' ||
+          installedApp.label.toLowerCase().includes('contacts') ||
+          installedApp.packageName.toLowerCase().includes('contacts') ||
+          installedApp.packageName.toLowerCase().includes('dialer')
+        );
+
+        if (contactsApp?.packageName) {
+          await RNLauncherKitHelper.launchApplication(contactsApp.packageName);
+          return;
         }
       }
 
@@ -164,15 +195,8 @@ export default function TabOneScreen() {
   const handleModeSwitch = (nextMode: 'Focus' | 'Productive' | 'Relax') => {
     const changed = setMode(nextMode);
 
-    if (!changed) {
-      if (nextMode === 'Relax') {
-        Alert.alert('Relax locked', `Relax mode is available after ${settings.focusEndHour}:00 on weekdays.`);
-        return;
-      }
-
-      if (nextMode === 'Productive') {
-        Alert.alert('Productive peek used', 'Productive mode is available for 5 minutes once per hour on weekdays.');
-      }
+    if (!changed && nextMode === 'Relax') {
+      Alert.alert('Relax locked', `Relax mode is available after ${settings.focusEndHour}:00 on weekdays.`);
     }
   };
 
@@ -191,7 +215,7 @@ export default function TabOneScreen() {
       <View className="mb-12 items-center justify-center">
         <View
           className="mb-6 h-56 w-56 items-center justify-center rounded-full border"
-          style={{ borderColor: withAlpha(settings.launcherColor, subtleSurfaceAlpha), backgroundColor: withAlpha(settings.launcherColor, Math.max(2, Math.round(settings.surfaceOpacity * 0.55)).toString(16).padStart(2, '0')) }}
+          style={{ borderColor: withAlpha(settings.launcherColor, subtleSurfaceAlpha), backgroundColor: withAlpha(settings.launcherColor, toAlphaHex(Math.max(0, settings.surfaceOpacity * 0.55))) }}
         >
           {[0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330].map((rotation) => (
             <View
@@ -226,11 +250,11 @@ export default function TabOneScreen() {
           />
           <View className="h-4 w-4 rounded-full" style={{ backgroundColor: settings.launcherColor }} />
         </View>
-        <Text className="text-zinc-500 text-lg text-center">
+        <Text className="text-zinc-500 text-lg text-center" style={launcherFontStyle}>
           {formatDate(currentTime)}
         </Text>
-        <View className={`mt-4 rounded-full border px-4 py-2 ${modeConfig.pill}`} style={{ borderColor: withAlpha(settings.launcherColor, subtleSurfaceAlpha), backgroundColor: withAlpha(settings.launcherColor, Math.max(4, Math.round(settings.surfaceOpacity * 0.75)).toString(16).padStart(2, '0')) }}>
-          <Text className="text-xs uppercase tracking-[3px]" style={{ color: settings.launcherColor }}>
+        <View className={`mt-4 rounded-full border px-4 py-2 ${modeConfig.pill}`} style={{ borderColor: withAlpha(settings.launcherColor, subtleSurfaceAlpha), backgroundColor: withAlpha(settings.launcherColor, toAlphaHex(Math.max(0, settings.surfaceOpacity * 0.75))) }}>
+          <Text className="text-xs uppercase tracking-[3px]" style={[{ color: settings.launcherColor }, launcherFontStyle]}>
             {modeConfig.label}
           </Text>
         </View>
@@ -247,7 +271,7 @@ export default function TabOneScreen() {
             <View className="h-14 w-14 items-center justify-center rounded-2xl" style={{ backgroundColor: withAlpha(settings.launcherColor, surfaceAlpha) }}>
               <MaterialIcons name={app.icon} size={26} color={settings.launcherColor} />
             </View>
-            <Text className="text-2xl font-light" style={{ color: settings.launcherColor }}>
+            <Text className="text-2xl font-light" style={[{ color: settings.launcherColor }, launcherFontStyle]}>
               {app.name}
             </Text>
           </Pressable>
@@ -257,7 +281,7 @@ export default function TabOneScreen() {
       <View className="mb-8 flex-row gap-3">
         {(['Focus', 'Productive', 'Relax'] as const).map((modeOption) => {
           const isActive = mode === modeOption;
-          const isDisabled = (modeOption === 'Relax' && !canUseRelax) || (modeOption === 'Productive' && !canUseProductivePeek);
+          const isDisabled = modeOption === 'Relax' && !canUseRelax;
 
           return (
             <Pressable
@@ -268,10 +292,10 @@ export default function TabOneScreen() {
               } ${isDisabled ? 'opacity-40' : 'opacity-100'}`}
               style={isActive ? { borderColor: settings.launcherColor, backgroundColor: withAlpha(settings.launcherColor, surfaceAlpha) } : undefined}
             >
-              <Text className="text-center text-sm font-medium text-white">
+              <Text className="text-center text-sm font-medium text-white" style={launcherFontStyle}>
                 {modeOption}
               </Text>
-              <Text className="mt-1 text-center text-[10px] uppercase tracking-[2px] text-zinc-400">
+              <Text className="mt-1 text-center text-[10px] uppercase tracking-[2px] text-zinc-400" style={launcherFontStyle}>
                 {modeOption === 'Relax'
                   ? (canUseRelax ? (isWeekend ? 'Weekend anytime' : 'Available') : `After ${settings.focusEndHour}:00`)
                   : modeOption === 'Productive'

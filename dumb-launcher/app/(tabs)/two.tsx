@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, FlatList, TextInput, TouchableOpacity, Alert, Pressable, ScrollView, Platform, PanResponder, Image, ImageBackground } from 'react-native';
+import { View, Text, FlatList, TextInput, TouchableOpacity, Alert, Pressable, ScrollView, Platform, PanResponder, Image, ImageBackground, PermissionsAndroid } from 'react-native';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { Linking } from 'react-native';
 import { router } from 'expo-router';
@@ -7,8 +7,8 @@ import { InstalledApps, RNLauncherKitHelper } from 'react-native-launcher-kit';
 import { useLauncherMode } from '../../src/hooks/useLauncherMode';
 import { ALL_LAUNCHER_APPS, LauncherApp } from '../../src/constants/launcherApps';
 
-const COLOR_OPTIONS = ['#3B82F6', '#10B981', '#8B5CF6', '#F97316', '#EF4444'];
 const ICON_OPTIONS = ['apps', 'home', 'rocket-launch', 'dashboard-customize', 'widgets'];
+const ANDROID_FONT_OPTIONS = ['System', 'sans-serif', 'sans-serif-light', 'sans-serif-medium', 'sans-serif-condensed', 'serif', 'monospace', 'casual', 'cursive'];
 const ImagePickerModule = (() => {
   try {
     return require('expo-image-picker');
@@ -23,6 +23,13 @@ const ContactsModule = (() => {
     return null;
   }
 })();
+const LocationModule = (() => {
+  try {
+    return require('expo-location');
+  } catch {
+    return null;
+  }
+})();
 const SYSTEM_SHORTCUTS = [
   { key: 'wallpaper', label: 'Wallpaper', action: 'android.settings.WALLPAPER_SETTINGS', fallback: 'app-settings:' },
   { key: 'display', label: 'Display', action: 'android.settings.DISPLAY_SETTINGS', fallback: 'app-settings:' },
@@ -31,6 +38,55 @@ const SYSTEM_SHORTCUTS = [
 ] as const;
 
 const withAlpha = (hex: string, alpha: string) => `${hex}${alpha}`;
+
+const toAlphaHex = (percent: number) => Math.max(0, Math.min(255, Math.round((percent / 100) * 255)))
+  .toString(16)
+  .padStart(2, '0');
+
+const normalizeHexColor = (value: string) => {
+  const cleaned = value.trim().replace(/[^0-9a-fA-F]/g, '').slice(0, 6);
+
+  if (cleaned.length === 3) {
+    return `#${cleaned.split('').map((char) => `${char}${char}`).join('').toUpperCase()}`;
+  }
+
+  if (cleaned.length === 6) {
+    return `#${cleaned.toUpperCase()}`;
+  }
+
+  return null;
+};
+
+const hexToRgb = (hex: string) => {
+  const normalized = normalizeHexColor(hex);
+
+  if (!normalized) {
+    return { r: 59, g: 130, b: 246 };
+  }
+
+  return {
+    r: parseInt(normalized.slice(1, 3), 16),
+    g: parseInt(normalized.slice(3, 5), 16),
+    b: parseInt(normalized.slice(5, 7), 16),
+  };
+};
+
+const rgbToHex = (r: number, g: number, b: number) => `#${[r, g, b]
+  .map((value) => Math.max(0, Math.min(255, value)).toString(16).padStart(2, '0'))
+  .join('')
+  .toUpperCase()}`;
+
+const getAppCategory = (appName: string, packageName?: string) => {
+  const combined = `${appName} ${packageName || ''}`.toLowerCase();
+
+  if (combined.includes('mail') || combined.includes('message') || combined.includes('sms') || combined.includes('chat') || combined.includes('whatsapp') || combined.includes('telegram') || combined.includes('phone') || combined.includes('contact')) return 'Communication';
+  if (combined.includes('calendar') || combined.includes('docs') || combined.includes('drive') || combined.includes('slack') || combined.includes('teams') || combined.includes('meet') || combined.includes('zoom') || combined.includes('note') || combined.includes('keep') || combined.includes('task')) return 'Productivity';
+  if (combined.includes('camera') || combined.includes('photo') || combined.includes('gallery') || combined.includes('music') || combined.includes('spotify') || combined.includes('youtube') || combined.includes('video') || combined.includes('netflix') || combined.includes('prime') || combined.includes('hotstar')) return 'Media';
+  if (combined.includes('chrome') || combined.includes('browser') || combined.includes('firefox') || combined.includes('edge') || combined.includes('search')) return 'Browser';
+  if (combined.includes('setting') || combined.includes('config')) return 'System';
+  if (combined.includes('game')) return 'Games';
+  return 'App';
+};
 
 // Map app names to MaterialIcons for consistent theming
 const getMaterialIconForApp = (appName: string, packageName?: string): React.ComponentProps<typeof MaterialIcons>['name'] => {
@@ -85,13 +141,18 @@ type DeviceContact = {
 };
 
 export default function TabTwoScreen() {
-  const { mode, currentTime, settings, updateSettings, canPeekApp } = useLauncherMode();
+  const { mode, currentTime, settings, updateSettings, canPeekApp, requestAppAccess } = useLauncherMode();
   const [search, setSearch] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [activePicker, setActivePicker] = useState<'focusPeekApps' | 'productivePeekApps' | 'favoriteContactIds' | null>(null);
   const [installedApps, setInstalledApps] = useState<DeviceApp[]>([]);
   const [contacts, setContacts] = useState<DeviceContact[]>([]);
   const [isLoadingApps, setIsLoadingApps] = useState(Platform.OS === 'android');
+  const [colorInput, setColorInput] = useState(settings.launcherColor);
+
+  const launcherFontStyle = settings.followSystemFont || settings.launcherFontFamily === 'System'
+    ? undefined
+    : { fontFamily: settings.launcherFontFamily };
 
   const formatTime = (date: Date) => {
     return date.toLocaleTimeString('en-US', {
@@ -100,6 +161,30 @@ export default function TabTwoScreen() {
       second: '2-digit',
       hour12: false
     });
+  };
+
+  const currentRgb = hexToRgb(settings.launcherColor);
+
+  const updateRgbChannel = (channel: 'r' | 'g' | 'b', value: string) => {
+    const parsed = Number(value);
+
+    if (Number.isNaN(parsed) || parsed < 0 || parsed > 255) {
+      return;
+    }
+
+    const nextRgb = { ...currentRgb, [channel]: parsed };
+    const nextColor = rgbToHex(nextRgb.r, nextRgb.g, nextRgb.b);
+    setColorInput(nextColor);
+    updateSettings({ launcherColor: nextColor, followSystemTheme: false });
+  };
+
+  const applyHexColor = (value: string) => {
+    setColorInput(value);
+    const normalized = normalizeHexColor(value);
+
+    if (normalized) {
+      updateSettings({ launcherColor: normalized, followSystemTheme: false });
+    }
   };
 
   useEffect(() => {
@@ -130,7 +215,7 @@ export default function TabTwoScreen() {
         const normalizedApps: DeviceApp[] = apps.map((app, index) => ({
           id: `${app.packageName}-${index}`,
           name: app.label,
-          category: 'Installed app',
+          category: getAppCategory(app.label, app.packageName),
           icon: app.icon,
           packageName: app.packageName,
           accentColor: app.accentColor,
@@ -165,6 +250,10 @@ export default function TabTwoScreen() {
   }, []);
 
   useEffect(() => {
+    setColorInput(settings.launcherColor);
+  }, [settings.launcherColor]);
+
+  useEffect(() => {
     let isMounted = true;
 
     const loadContacts = async () => {
@@ -190,8 +279,8 @@ export default function TabTwoScreen() {
 
         const normalizedContacts = response.data
           .filter((contact: { name?: string }) => !!contact.name)
-          .map((contact: { id: string; name?: string; phoneNumbers?: Array<{ number?: string }> }) => ({
-            id: contact.id,
+          .map((contact: { id: string; lookupKey?: string; name?: string; phoneNumbers?: Array<{ number?: string }> }) => ({
+            id: contact.lookupKey || contact.id,
             name: contact.name || 'Unknown',
             phone: contact.phoneNumbers?.[0]?.number,
           }));
@@ -237,7 +326,11 @@ export default function TabTwoScreen() {
 
   const launchApp = async (app: DeviceApp | LauncherApp) => {
     try {
-      if (isAppLocked(app.name, app.category)) {
+      const hasAccess = mode === 'Productive'
+        ? requestAppAccess(app.name, app.category)
+        : !isAppLocked(app.name, app.category);
+
+      if (!hasAccess) {
         Alert.alert('Peek only', `${app.name} is blocked in ${mode} mode unless added as a ${mode === 'Focus' ? 'focus peek' : 'productive peek'} app.`);
         return;
       }
@@ -245,6 +338,88 @@ export default function TabTwoScreen() {
       if (Platform.OS === 'android' && 'packageName' in app && app.packageName) {
         await RNLauncherKitHelper.launchApplication(app.packageName);
         return;
+      }
+
+      if (Platform.OS === 'android') {
+        if (app.name === 'Camera') {
+          const androidApps = await InstalledApps.getSortedApps({ includeVersion: false, includeAccentColor: false });
+          const cameraPackages = ['com.android.camera', 'com.google.android.GoogleCamera', 'com.samsung.android.camera', 'com.sec.android.app.camera', 'com.oplus.camera', 'com.oneplus.camera', 'com.motorola.camera3', 'org.lineageos.snap'];
+
+          for (const packageName of cameraPackages) {
+            try {
+              await RNLauncherKitHelper.launchApplication(packageName);
+              return;
+            } catch (error) {
+              continue;
+            }
+          }
+
+          const cameraApp = androidApps.find((installedApp) =>
+            installedApp.label.toLowerCase() === 'camera' ||
+            installedApp.label.toLowerCase() === 'camera go' ||
+            installedApp.label.toLowerCase().includes('camera') ||
+            installedApp.packageName.toLowerCase().includes('camera') ||
+            installedApp.packageName.toLowerCase().includes('gcam') ||
+            installedApp.packageName.toLowerCase().includes('snap')
+          );
+
+          if (cameraApp?.packageName) {
+            await RNLauncherKitHelper.launchApplication(cameraApp.packageName);
+            return;
+          }
+        }
+
+        if (app.name === 'Contacts') {
+          const androidApps = await InstalledApps.getSortedApps({ includeVersion: false, includeAccentColor: false });
+          const contactsPackages = ['com.google.android.contacts', 'com.android.contacts', 'com.samsung.android.contacts', 'com.android.dialer'];
+
+          for (const packageName of contactsPackages) {
+            try {
+              await RNLauncherKitHelper.launchApplication(packageName);
+              return;
+            } catch (error) {
+              continue;
+            }
+          }
+
+          const contactsApp = androidApps.find((installedApp) =>
+            installedApp.label.toLowerCase() === 'contacts' ||
+            installedApp.label.toLowerCase() === 'phone' ||
+            installedApp.label.toLowerCase().includes('contacts') ||
+            installedApp.packageName.toLowerCase().includes('contacts') ||
+            installedApp.packageName.toLowerCase().includes('dialer')
+          );
+
+          if (contactsApp?.packageName) {
+            await RNLauncherKitHelper.launchApplication(contactsApp.packageName);
+            return;
+          }
+        }
+
+        if (app.name === 'Calendar') {
+          const androidApps = await InstalledApps.getSortedApps({ includeVersion: false, includeAccentColor: false });
+          const calendarPackages = ['com.google.android.calendar', 'com.samsung.android.calendar', 'com.android.calendar'];
+
+          for (const packageName of calendarPackages) {
+            try {
+              await RNLauncherKitHelper.launchApplication(packageName);
+              return;
+            } catch (error) {
+              continue;
+            }
+          }
+
+          const calendarApp = androidApps.find((installedApp) =>
+            installedApp.label.toLowerCase() === 'calendar' ||
+            installedApp.label.toLowerCase().includes('calendar') ||
+            installedApp.packageName.toLowerCase().includes('calendar')
+          );
+
+          if (calendarApp?.packageName) {
+            await RNLauncherKitHelper.launchApplication(calendarApp.packageName);
+            return;
+          }
+        }
       }
 
       if (!('scheme' in app) || !app.scheme) {
@@ -260,6 +435,46 @@ export default function TabTwoScreen() {
       }
     } catch (error) {
       Alert.alert('Error', `Failed to open ${app.name}`);
+    }
+  };
+
+  const requestImportantPermissions = async () => {
+    if (Platform.OS !== 'android') {
+      Alert.alert('Android only', 'This permission helper is available on Android devices.');
+      return;
+    }
+
+    try {
+      const permissionResults = await PermissionsAndroid.requestMultiple([
+        PermissionsAndroid.PERMISSIONS.CAMERA,
+        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+        PermissionsAndroid.PERMISSIONS.READ_CONTACTS,
+        PermissionsAndroid.PERMISSIONS.READ_PHONE_STATE,
+        PermissionsAndroid.PERMISSIONS.CALL_PHONE,
+        PermissionsAndroid.PERMISSIONS.READ_SMS,
+        PermissionsAndroid.PERMISSIONS.SEND_SMS,
+        PermissionsAndroid.PERMISSIONS.READ_CALENDAR,
+        PermissionsAndroid.PERMISSIONS.WRITE_CALENDAR,
+        PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+        PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+        PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES,
+        PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO,
+        PermissionsAndroid.PERMISSIONS.READ_MEDIA_AUDIO,
+      ]);
+
+      if (ContactsModule) {
+        await ContactsModule.requestPermissionsAsync();
+      }
+
+      if (LocationModule) {
+        await LocationModule.requestForegroundPermissionsAsync();
+      }
+
+      const grantedCount = Object.values(permissionResults).filter((status) => status === PermissionsAndroid.RESULTS.GRANTED).length;
+      Alert.alert('Permissions updated', `${grantedCount} Android permissions granted. You can also manage any denied permissions from system settings.`);
+    } catch (error) {
+      Alert.alert('Permission request failed', 'Could not request permissions on this device.');
     }
   };
 
@@ -290,7 +505,7 @@ export default function TabTwoScreen() {
   };
 
   const selectedContactNames = settings.favoriteContactIds
-    .map((contactId) => contacts.find((contact) => contact.id === contactId)?.name)
+    .map((contactId) => contacts.find((contact) => contact.id === contactId || contact.id === contactId.split('::')[0])?.name || contactId)
     .filter(Boolean) as string[];
 
   const openSystemShortcut = async (action: string, fallback: string) => {
@@ -384,10 +599,10 @@ export default function TabTwoScreen() {
       {/* Header with Real-time Status */}
       <View className="flex-row justify-between items-center mb-8">
         <View>
-          <Text className="text-white text-3xl font-light tracking-tight">Library</Text>
+          <Text className="text-white text-3xl font-light tracking-tight" style={launcherFontStyle}>Library</Text>
           <Text className={`text-xs mt-1 font-mono ${
             mode === 'Focus' ? 'text-green-400' : mode === 'Productive' ? 'text-emerald-300' : 'text-purple-400'
-          }`}>
+          }`} style={launcherFontStyle}>
             {formatTime(currentTime)} • {mode}
           </Text>
         </View>
@@ -399,7 +614,7 @@ export default function TabTwoScreen() {
       {showSettings && (
         <View className="mb-6 max-h-[420px] rounded-3xl border border-white/10 bg-zinc-950/95 p-5" style={{ borderColor: withAlpha(settings.launcherColor, '55'), backgroundColor: withAlpha(settings.launcherColor, '10') }}>
           <ScrollView showsVerticalScrollIndicator={false}>
-            <Text className="mb-4 text-lg font-medium text-white">Launcher settings</Text>
+            <Text className="mb-4 text-lg font-medium text-white" style={launcherFontStyle}>Launcher settings</Text>
 
             <Text className="mb-2 text-xs uppercase tracking-[2px] text-zinc-500">Focus schedule</Text>
             <View className="mb-4 flex-row gap-3">
@@ -441,12 +656,12 @@ export default function TabTwoScreen() {
 
             <Text className="mb-2 text-xs uppercase tracking-[2px] text-zinc-500">Surface opacity</Text>
             <View className="mb-4 rounded-2xl bg-zinc-900 px-4 py-3">
-              <Text className="mb-2 text-xs text-zinc-500">Cards, buttons and clock tint (4-32)</Text>
+              <Text className="mb-2 text-xs text-zinc-500">Cards, buttons and clock tint (0-100)</Text>
               <TextInput
                 value={String(settings.surfaceOpacity)}
                 onChangeText={(value) => {
                   const parsed = Number(value);
-                  if (!Number.isNaN(parsed) && parsed >= 4 && parsed <= 32) {
+                  if (!Number.isNaN(parsed) && parsed >= 0 && parsed <= 100) {
                     updateSettings({ surfaceOpacity: parsed });
                   }
                 }}
@@ -538,21 +753,57 @@ export default function TabTwoScreen() {
             </View>
 
             <Text className="mb-2 text-xs uppercase tracking-[2px] text-zinc-500">Launcher color</Text>
-            <View className="mb-4 flex-row gap-2">
-              {COLOR_OPTIONS.map((color) => (
-                <Pressable
-                  key={color}
-                  onPress={() => updateSettings({ launcherColor: color })}
-                  className="h-10 w-10 rounded-full border border-white/10 items-center justify-center"
-                  style={{ backgroundColor: color, borderColor: settings.launcherColor === color ? '#ffffff' : withAlpha(color, '66') }}
-                >
-                  {settings.launcherColor === color && <MaterialIcons name="check" size={16} color="#ffffff" />}
-                </Pressable>
-              ))}
+            <View className="mb-4 rounded-2xl bg-zinc-900 px-4 py-4">
+              <Text className="mb-2 text-xs text-zinc-500" style={launcherFontStyle}>Hex color</Text>
+              <TextInput
+                value={colorInput}
+                onChangeText={applyHexColor}
+                autoCapitalize="characters"
+                placeholder="#3B82F6"
+                placeholderTextColor="#71717a"
+                className="rounded-xl border border-white/10 px-3 py-3 text-white"
+                style={launcherFontStyle}
+              />
+              <View className="mt-4 flex-row gap-3">
+                {(['r', 'g', 'b'] as const).map((channel) => (
+                  <View key={channel} className="flex-1 rounded-2xl bg-black/30 px-3 py-3">
+                    <Text className="mb-2 text-xs uppercase tracking-[2px] text-zinc-500" style={launcherFontStyle}>{channel}</Text>
+                    <TextInput
+                      value={String(currentRgb[channel])}
+                      onChangeText={(value) => updateRgbChannel(channel, value)}
+                      keyboardType="number-pad"
+                      className="text-white"
+                      style={launcherFontStyle}
+                    />
+                  </View>
+                ))}
+              </View>
+              <View className="mt-4 h-12 rounded-2xl border border-white/10" style={{ backgroundColor: settings.launcherColor }} />
             </View>
 
-            <View className="mb-4 rounded-2xl px-4 py-4" style={{ backgroundColor: withAlpha(settings.launcherColor, '22') }}>
-              <Text className="mb-2 text-xs text-zinc-300">Wallpaper and icon tint preview</Text>
+            <Text className="mb-2 text-xs uppercase tracking-[2px] text-zinc-500">Launcher font</Text>
+            <View className="mb-4 flex-row flex-wrap gap-2">
+              {ANDROID_FONT_OPTIONS.map((fontName) => {
+                const isSelected = settings.launcherFontFamily === fontName;
+
+                return (
+                  <Pressable
+                    key={fontName}
+                    onPress={() => updateSettings({ launcherFontFamily: fontName, followSystemFont: fontName === 'System' })}
+                    className="rounded-2xl border px-4 py-3"
+                    style={{
+                      borderColor: isSelected ? settings.launcherColor : '#27272a',
+                      backgroundColor: isSelected ? withAlpha(settings.launcherColor, '22') : '#18181b',
+                    }}
+                  >
+                    <Text className="text-sm text-white" style={fontName === 'System' ? undefined : { fontFamily: fontName }}>{fontName}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <View className="mb-4 rounded-2xl px-4 py-4" style={{ backgroundColor: withAlpha(settings.launcherColor, toAlphaHex(Math.max(10, settings.surfaceOpacity))) }}>
+              <Text className="mb-2 text-xs text-zinc-300" style={launcherFontStyle}>Wallpaper and icon tint preview</Text>
               <View className="flex-row items-center justify-between rounded-2xl bg-black/30 px-4 py-4">
                 <View className="flex-row gap-3">
                   {['phone', 'chat', 'camera-alt'].map((iconName) => (
@@ -562,8 +813,8 @@ export default function TabTwoScreen() {
                   ))}
                 </View>
                 <View className="items-end">
-                  <Text className="text-xs uppercase tracking-[2px] text-zinc-400">Tint</Text>
-                  <Text className="mt-1 text-sm text-white">{settings.launcherColor}</Text>
+                  <Text className="text-xs uppercase tracking-[2px] text-zinc-400" style={launcherFontStyle}>Tint</Text>
+                  <Text className="mt-1 text-sm text-white" style={launcherFontStyle}>{settings.launcherColor}</Text>
                 </View>
               </View>
             </View>
@@ -573,7 +824,7 @@ export default function TabTwoScreen() {
               <Pressable
                 onPress={pickLauncherWallpaper}
                 className="rounded-2xl border border-white/10 px-4 py-3"
-                style={{ backgroundColor: withAlpha(settings.launcherColor, '18') }}
+                style={{ backgroundColor: withAlpha(settings.launcherColor, toAlphaHex(Math.max(8, settings.surfaceOpacity))) }}
               >
                 <Text className="text-sm text-white">Choose launcher wallpaper</Text>
               </Pressable>
@@ -604,12 +855,19 @@ export default function TabTwoScreen() {
 
             <Text className="mb-2 text-xs uppercase tracking-[2px] text-zinc-500">Android personalization</Text>
             <View className="mb-4 flex-row flex-wrap gap-2">
+              <Pressable
+                onPress={requestImportantPermissions}
+                className="rounded-2xl border border-white/10 px-4 py-3"
+                style={{ backgroundColor: withAlpha(settings.launcherColor, toAlphaHex(Math.max(8, settings.surfaceOpacity))) }}
+              >
+                <Text className="text-sm text-white">Grant app permissions</Text>
+              </Pressable>
               {SYSTEM_SHORTCUTS.map((shortcut) => (
                 <Pressable
                   key={shortcut.key}
                   onPress={() => openSystemShortcut(shortcut.action, shortcut.fallback)}
                   className="rounded-2xl border border-white/10 px-4 py-3"
-                  style={{ backgroundColor: withAlpha(settings.launcherColor, '18') }}
+                  style={{ backgroundColor: withAlpha(settings.launcherColor, toAlphaHex(Math.max(8, settings.surfaceOpacity))) }}
                 >
                   <Text className="text-sm text-white">{shortcut.label}</Text>
                 </Pressable>
@@ -665,12 +923,12 @@ export default function TabTwoScreen() {
             <View className="flex-row items-center gap-3">
               {renderAppVisual(item)}
               <View>
-                <Text className={`text-xl font-light ${isAppLocked(item.name, item.category) ? 'text-zinc-700' : 'text-zinc-300'}`}>
+                <Text className="text-xl font-light" style={[{ color: isAppLocked(item.name, item.category) ? '#3f3f46' : settings.launcherColor }, launcherFontStyle]}>
                   {item.name}
                 </Text>
-                <Text className="mt-1 text-xs uppercase tracking-widest text-zinc-500">{item.category}</Text>
+                <Text className="mt-1 text-xs uppercase tracking-widest text-zinc-500" style={launcherFontStyle}>{item.category}</Text>
                 {isAppLocked(item.name, item.category) && (
-                  <Text className="text-xs text-zinc-800 uppercase tracking-widest mt-1">Peek blocked in {mode}</Text>
+                  <Text className="text-xs text-zinc-800 uppercase tracking-widest mt-1" style={launcherFontStyle}>Peek blocked in {mode}</Text>
                 )}
               </View>
             </View>
@@ -682,10 +940,10 @@ export default function TabTwoScreen() {
 
       {/* Mode Status Footer with Real-time Info */}
       <View className="py-6 border-t border-white/10">
-        <Text className="text-zinc-600 text-center text-xs uppercase tracking-[4px] mb-2">
+        <Text className="text-zinc-600 text-center text-xs uppercase tracking-[4px] mb-2" style={launcherFontStyle}>
           {mode === 'Focus' ? 'Focus Protocol Active' : mode === 'Productive' ? 'Productive Mode Active' : 'Relax Mode Available'}
         </Text>
-        <Text className="text-zinc-700 text-center text-xs font-mono">
+        <Text className="text-zinc-700 text-center text-xs font-mono" style={launcherFontStyle}>
           {mode === 'Focus'
             ? `Communication/productive peek: ${settings.peekMinutes} min`
             : mode === 'Productive'

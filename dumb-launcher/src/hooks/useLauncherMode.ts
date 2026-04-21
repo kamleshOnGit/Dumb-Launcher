@@ -15,6 +15,7 @@ export interface LauncherSettings {
   productivePeekApps: string[];
   favoriteContactIds: string[];
   launcherColor: string;
+  launcherFontFamily: string;
   launcherIcon: string;
   wallpaperUri: string | null;
   surfaceOpacity: number;
@@ -36,6 +37,7 @@ interface LauncherModeContextValue {
   canUseProductivePeek: boolean;
   productivePeekEndsAt: Date | null;
   canPeekApp: (appName: string, category: string) => boolean;
+  requestAppAccess: (appName: string, category: string) => boolean;
 }
 
 const defaultSettings: LauncherSettings = {
@@ -46,6 +48,7 @@ const defaultSettings: LauncherSettings = {
   productivePeekApps: ['Netflix'],
   favoriteContactIds: [],
   launcherColor: '#3B82F6',
+  launcherFontFamily: 'System',
   launcherIcon: 'apps',
   wallpaperUri: null,
   surfaceOpacity: 14,
@@ -136,24 +139,15 @@ export function LauncherModeProvider({ children }: { children: React.ReactNode }
   );
 
   const canUseProductivePeek = useMemo(() => {
-    if (isWeekend || !isFocusWindow) {
-      return true;
-    }
-
-    if (isProductivePeekActive) {
-      return true;
-    }
-
     return productivePeekHourKey !== currentHourKey;
-  }, [currentHourKey, isFocusWindow, isProductivePeekActive, isWeekend, productivePeekHourKey]);
+  }, [currentHourKey, productivePeekHourKey]);
 
   useEffect(() => {
     if (!isWeekend && isFocusWindow && mode === 'Relax') {
       setModeState('Focus');
     }
 
-    if (!isWeekend && isFocusWindow && mode === 'Productive' && productivePeekEndsAtMs !== null && productivePeekEndsAtMs <= currentTime.getTime()) {
-      setModeState('Focus');
+    if (productivePeekEndsAtMs !== null && productivePeekEndsAtMs <= currentTime.getTime()) {
       setProductivePeekEndsAtMs(null);
     }
 
@@ -168,24 +162,10 @@ export function LauncherModeProvider({ children }: { children: React.ReactNode }
         return false;
       }
 
-      if (nextMode === 'Productive' && !isWeekend && isFocusWindow && !isProductivePeekActive) {
-        if (productivePeekHourKey === currentHourKey) {
-          return false;
-        }
-
-        const endsAt = Date.now() + 5 * 60 * 1000;
-        setProductivePeekHourKey(currentHourKey);
-        setProductivePeekEndsAtMs(endsAt);
-      }
-
-      if (nextMode !== 'Productive' && mode === 'Productive' && !isProductivePeekActive) {
-        setProductivePeekEndsAtMs(null);
-      }
-
       setModeState(nextMode);
       return true;
     },
-    [currentHourKey, isFocusWindow, isProductivePeekActive, isWeekend, mode, productivePeekHourKey]
+    [isFocusWindow, isWeekend]
   );
 
   const forceMode = useCallback((nextMode: Mode) => {
@@ -203,12 +183,54 @@ export function LauncherModeProvider({ children }: { children: React.ReactNode }
       }
 
       if (mode === 'Productive') {
-        return category !== 'Entertainment' || settings.productivePeekApps.includes(appName);
+        if (category !== 'Entertainment') {
+          return true;
+        }
+
+        if (!settings.productivePeekApps.includes(appName)) {
+          return false;
+        }
+
+        if (isWeekend || !isFocusWindow) {
+          return true;
+        }
+
+        return isProductivePeekActive || productivePeekHourKey !== currentHourKey;
       }
 
       return true;
     },
-    [mode, settings.focusPeekApps, settings.productivePeekApps]
+    [currentHourKey, isFocusWindow, isProductivePeekActive, isWeekend, mode, productivePeekHourKey, settings.focusPeekApps, settings.productivePeekApps]
+  );
+
+  const requestAppAccess = useCallback(
+    (appName: string, category: string) => {
+      if (mode !== 'Productive' || category !== 'Entertainment') {
+        return canPeekApp(appName, category);
+      }
+
+      if (!settings.productivePeekApps.includes(appName)) {
+        return false;
+      }
+
+      if (isWeekend || !isFocusWindow) {
+        return true;
+      }
+
+      if (isProductivePeekActive) {
+        return true;
+      }
+
+      if (productivePeekHourKey === currentHourKey) {
+        return false;
+      }
+
+      const endsAt = Date.now() + settings.peekMinutes * 60 * 1000;
+      setProductivePeekHourKey(currentHourKey);
+      setProductivePeekEndsAtMs(endsAt);
+      return true;
+    },
+    [canPeekApp, currentHourKey, isFocusWindow, isProductivePeekActive, isWeekend, mode, productivePeekHourKey, settings.peekMinutes, settings.productivePeekApps]
   );
 
   const value = useMemo(
@@ -225,8 +247,9 @@ export function LauncherModeProvider({ children }: { children: React.ReactNode }
       canUseProductivePeek,
       productivePeekEndsAt,
       canPeekApp,
+      requestAppAccess,
     }),
-    [mode, setMode, forceMode, isFocusWindow, isWeekend, currentTime, settings, updateSettings, canUseProductivePeek, productivePeekEndsAt, canPeekApp]
+    [mode, setMode, forceMode, isFocusWindow, isWeekend, currentTime, settings, updateSettings, canUseProductivePeek, productivePeekEndsAt, canPeekApp, requestAppAccess]
   );
 
   return React.createElement(LauncherModeContext.Provider, { value }, children);

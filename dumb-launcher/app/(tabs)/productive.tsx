@@ -7,6 +7,7 @@ import { useLauncherMode } from '../../src/hooks/useLauncherMode';
 import { InstalledApps, RNLauncherKitHelper } from 'react-native-launcher-kit';
 
 const withAlpha = (hex: string, alpha: string) => `${hex}${alpha}`;
+const toAlphaHex = (percent: number) => Math.max(0, Math.min(255, Math.round((percent / 100) * 255))).toString(16).padStart(2, '0');
 const CalendarModule = (() => {
   try {
     return require('expo-calendar');
@@ -17,6 +18,13 @@ const CalendarModule = (() => {
 const ContactsModule = (() => {
   try {
     return require('expo-contacts');
+  } catch {
+    return null;
+  }
+})();
+const LocationModule = (() => {
+  try {
+    return require('expo-location');
   } catch {
     return null;
   }
@@ -43,6 +51,14 @@ interface MusicInfo {
   appName: string;
 }
 
+interface WeatherInfo {
+  temperature: number | null;
+  condition: string;
+  locationLabel: string;
+  high: number | null;
+  low: number | null;
+}
+
 interface EmailInfo {
   unreadCount: number;
   lastSender: string;
@@ -58,14 +74,24 @@ interface TaskItem {
 
 export default function ProductiveScreen() {
   const { currentTime, settings } = useLauncherMode();
-  const surfaceAlpha = settings.surfaceOpacity.toString(16).padStart(2, '0');
-  const subtleSurfaceAlpha = Math.max(4, Math.round(settings.surfaceOpacity * 1.3)).toString(16).padStart(2, '0');
+  const launcherFontStyle = settings.followSystemFont || settings.launcherFontFamily === 'System'
+    ? undefined
+    : { fontFamily: settings.launcherFontFamily };
+  const surfaceAlpha = toAlphaHex(settings.surfaceOpacity);
+  const subtleSurfaceAlpha = toAlphaHex(Math.min(100, settings.surfaceOpacity * 1.3));
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [favoriteContacts, setFavoriteContacts] = useState<FavoriteContact[]>([]);
+  const [weatherInfo, setWeatherInfo] = useState<WeatherInfo>({
+    temperature: null,
+    condition: 'Weather unavailable',
+    locationLabel: 'Location needed',
+    high: null,
+    low: null,
+  });
   const [musicInfo, setMusicInfo] = useState<MusicInfo>({
     isPlaying: false,
-    track: 'Not Playing',
-    artist: 'Tap to open music',
+    track: 'Music ready',
+    artist: 'Open your player',
     appName: 'Music'
   });
   const [emailInfo, setEmailInfo] = useState<EmailInfo>({
@@ -80,6 +106,140 @@ export default function ProductiveScreen() {
     { id: '3', title: 'Review today plan', completed: true },
   ]);
   const [installedApps, setInstalledApps] = useState<{packageName: string; label: string}[]>([]);
+
+  const getInstalledApps = async () => {
+    if (installedApps.length > 0) {
+      return installedApps;
+    }
+
+    if (Platform.OS !== 'android') {
+      return [];
+    }
+
+    const apps = await InstalledApps.getSortedApps({ includeVersion: false, includeAccentColor: false });
+    const normalizedApps = apps.map((app) => ({ packageName: app.packageName, label: app.label }));
+    setInstalledApps(normalizedApps);
+    return normalizedApps;
+  };
+
+  const launchInstalledApp = async (candidates: string[], matcher?: (app: { packageName: string; label: string }) => boolean) => {
+    if (Platform.OS !== 'android') {
+      return false;
+    }
+
+    for (const packageName of candidates) {
+      try {
+        await RNLauncherKitHelper.launchApplication(packageName);
+        return true;
+      } catch (error) {
+        continue;
+      }
+    }
+
+    const apps = await getInstalledApps();
+    const matchedApp = matcher ? apps.find(matcher) : undefined;
+
+    if (matchedApp?.packageName) {
+      await RNLauncherKitHelper.launchApplication(matchedApp.packageName);
+      return true;
+    }
+
+    return false;
+  };
+
+  const loadWeather = async () => {
+    if (!LocationModule) {
+      setWeatherInfo({
+        temperature: null,
+        condition: 'Location module missing',
+        locationLabel: 'Weather unavailable',
+        high: null,
+        low: null,
+      });
+      return;
+    }
+
+    try {
+      const currentPermission = await LocationModule.getForegroundPermissionsAsync();
+      const permission = currentPermission.status === 'granted'
+        ? currentPermission
+        : await LocationModule.requestForegroundPermissionsAsync();
+
+      if (permission.status !== 'granted') {
+        setWeatherInfo({
+          temperature: null,
+          condition: 'Location permission off',
+          locationLabel: 'Tap Grant app permissions',
+          high: null,
+          low: null,
+        });
+        return;
+      }
+
+      const position = await LocationModule.getCurrentPositionAsync({ accuracy: LocationModule.Accuracy.Balanced, mayShowUserSettingsDialog: true });
+      const latitude = position.coords.latitude;
+      const longitude = position.coords.longitude;
+
+      let locationLabel = 'Current location';
+
+      try {
+        const reverseGeocode = await LocationModule.reverseGeocodeAsync({ latitude, longitude });
+        const place = reverseGeocode?.[0];
+        if (place) {
+          locationLabel = place.city || place.subregion || place.region || locationLabel;
+        }
+      } catch (error) {
+        locationLabel = 'Current location';
+      }
+
+      const response = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,weather_code&daily=temperature_2m_max,temperature_2m_min&forecast_days=1&timezone=auto`);
+      const data = await response.json();
+
+      if (!response.ok || !data?.current) {
+        throw new Error('Weather response invalid');
+      }
+
+      const weatherCodeMap: Record<number, string> = {
+        0: 'Clear sky',
+        1: 'Mostly clear',
+        2: 'Partly cloudy',
+        3: 'Overcast',
+        45: 'Foggy',
+        48: 'Foggy',
+        51: 'Light drizzle',
+        53: 'Drizzle',
+        55: 'Heavy drizzle',
+        61: 'Light rain',
+        63: 'Rain',
+        65: 'Heavy rain',
+        71: 'Light snow',
+        73: 'Snow',
+        75: 'Heavy snow',
+        80: 'Rain showers',
+        81: 'Heavy showers',
+        82: 'Storm showers',
+        95: 'Thunderstorm',
+        96: 'Storm and hail',
+        99: 'Severe storm',
+      };
+
+      setWeatherInfo({
+        temperature: typeof data.current.temperature_2m === 'number' ? Math.round(data.current.temperature_2m) : null,
+        condition: weatherCodeMap[data.current.weather_code] || 'Weather update',
+        locationLabel,
+        high: typeof data?.daily?.temperature_2m_max?.[0] === 'number' ? Math.round(data.daily.temperature_2m_max[0]) : null,
+        low: typeof data?.daily?.temperature_2m_min?.[0] === 'number' ? Math.round(data.daily.temperature_2m_min[0]) : null,
+      });
+    } catch (error) {
+      setWeatherInfo({
+        temperature: null,
+        condition: 'Weather unavailable',
+        locationLabel: 'Check internet/location',
+        high: null,
+        low: null,
+      });
+    }
+  };
 
   const swipeResponder = useMemo(
     () => PanResponder.create({
@@ -155,8 +315,7 @@ export default function ProductiveScreen() {
     const loadApps = async () => {
       if (Platform.OS !== 'android') return;
       try {
-        const apps = await InstalledApps.getSortedApps({ includeVersion: false, includeAccentColor: false });
-        setInstalledApps(apps.map(a => ({ packageName: a.packageName, label: a.label })));
+        const apps = await getInstalledApps();
 
         // Find music app
         const musicApp = apps.find(a =>
@@ -167,7 +326,12 @@ export default function ProductiveScreen() {
           a.label.toLowerCase().includes('wynk')
         );
         if (musicApp) {
-          setMusicInfo(prev => ({ ...prev, appName: musicApp.label }));
+          setMusicInfo(prev => ({
+            ...prev,
+            appName: musicApp.label,
+            track: musicApp.label,
+            artist: 'Tap to open now playing',
+          }));
         }
 
         // Find email app
@@ -187,12 +351,13 @@ export default function ProductiveScreen() {
 
     loadApps();
     loadCalendarEvents();
+    loadWeather();
 
     // Request contacts permission and load favorites on Android
     const loadContacts = async () => {
       try {
         if (Platform.OS === 'android') {
-          await PermissionsAndroid.request(
+          const androidPermission = await PermissionsAndroid.request(
             PermissionsAndroid.PERMISSIONS.READ_CONTACTS,
             {
               title: 'Contacts Permission',
@@ -200,24 +365,25 @@ export default function ProductiveScreen() {
               buttonPositive: 'OK',
             }
           );
+
+          if (androidPermission !== PermissionsAndroid.RESULTS.GRANTED) {
+            setFavoriteContacts([]);
+            return;
+          }
         }
 
         if (!ContactsModule) {
-          setFavoriteContacts([
-            { id: '1', name: 'Mom', phone: '' },
-            { id: '2', name: 'Dad', phone: '' },
-            { id: '3', name: 'Work', phone: '' },
-          ]);
+          setFavoriteContacts([]);
           return;
         }
 
-        const permission = await ContactsModule.requestPermissionsAsync();
+        const existingPermission = await ContactsModule.getPermissionsAsync();
+        const permission = existingPermission.status === 'granted'
+          ? existingPermission
+          : await ContactsModule.requestPermissionsAsync();
+
         if (permission.status !== 'granted') {
-          setFavoriteContacts([
-            { id: '1', name: 'Mom', phone: '' },
-            { id: '2', name: 'Dad', phone: '' },
-            { id: '3', name: 'Work', phone: '' },
-          ]);
+          setFavoriteContacts([]);
           return;
         }
 
@@ -228,8 +394,8 @@ export default function ProductiveScreen() {
 
         const normalizedContacts = response.data
           .filter((contact: { name?: string }) => !!contact.name)
-          .map((contact: { id: string; name?: string; phoneNumbers?: Array<{ number?: string }>; isFavorite?: boolean }) => ({
-            id: contact.id,
+          .map((contact: { id: string; lookupKey?: string; name?: string; phoneNumbers?: Array<{ number?: string }>; isFavorite?: boolean }) => ({
+            id: contact.lookupKey || contact.id,
             name: contact.name || 'Unknown',
             phone: contact.phoneNumbers?.[0]?.number,
             isFavorite: Boolean(contact.isFavorite),
@@ -237,12 +403,13 @@ export default function ProductiveScreen() {
 
         const selectedContacts = settings.favoriteContactIds.length
           ? settings.favoriteContactIds
-              .map((contactId) => normalizedContacts.find((contact: FavoriteContact) => contact.id === contactId))
+              .map((contactId) => normalizedContacts.find((contact: FavoriteContact) => contact.id === contactId || contact.id === contactId.split('::')[0]))
               .filter(Boolean) as FavoriteContact[]
           : [];
 
         if (selectedContacts.length > 0) {
-          setFavoriteContacts(selectedContacts.slice(0, 3));
+          const remainingContacts = normalizedContacts.filter((contact: FavoriteContact) => !selectedContacts.some((selected) => selected.id === contact.id));
+          setFavoriteContacts([...selectedContacts, ...remainingContacts].slice(0, 3));
           return;
         }
 
@@ -255,17 +422,9 @@ export default function ProductiveScreen() {
           return;
         }
 
-        setFavoriteContacts([
-          { id: '1', name: 'Mom', phone: '' },
-          { id: '2', name: 'Dad', phone: '' },
-          { id: '3', name: 'Work', phone: '' },
-        ]);
+        setFavoriteContacts(normalizedContacts.slice(0, 3));
       } catch (e) {
-        setFavoriteContacts([
-          { id: '1', name: 'Mom', phone: '' },
-          { id: '2', name: 'Dad', phone: '' },
-          { id: '3', name: 'Work', phone: '' },
-        ]);
+        setFavoriteContacts([]);
       }
     };
 
@@ -276,60 +435,58 @@ export default function ProductiveScreen() {
     try {
       // For Camera on Android, use package name if available
       if (name === 'Camera' && Platform.OS === 'android') {
-        const cameraPackages = ['com.android.camera', 'com.google.android.GoogleCamera', 'com.samsung.android.camera', 'org.lineageos.snap'];
-        for (const pkg of cameraPackages) {
-          try {
-            await RNLauncherKitHelper.launchApplication(pkg);
-            return;
-          } catch (e) {
-            continue;
-          }
-        }
-
-        const cameraApp = installedApps.find(a =>
-          a.label.toLowerCase().includes('camera') ||
-          a.packageName?.includes('camera') ||
-          a.packageName?.includes('gcam') ||
-          a.packageName?.includes('snap')
+        const opened = await launchInstalledApp(
+          ['com.android.camera', 'com.google.android.GoogleCamera', 'com.samsung.android.camera', 'com.sec.android.app.camera', 'com.oplus.camera', 'com.oneplus.camera', 'com.motorola.camera3', 'org.lineageos.snap'],
+          (app) =>
+            app.label.toLowerCase().includes('camera') ||
+            app.packageName.toLowerCase().includes('camera') ||
+            app.packageName.toLowerCase().includes('gcam') ||
+            app.packageName.toLowerCase().includes('snap')
         );
 
-        if (cameraApp?.packageName) {
-          await RNLauncherKitHelper.launchApplication(cameraApp.packageName);
+        if (opened) {
           return;
         }
       }
 
       // For Calendar on Android, try specific calendar packages first
       if (name === 'Calendar' && Platform.OS === 'android') {
-        const calendarPackages = ['com.google.android.calendar', 'com.samsung.android.calendar', 'com.android.calendar'];
-        for (const pkg of calendarPackages) {
-          try {
-            await RNLauncherKitHelper.launchApplication(pkg);
-            return;
-          } catch (e) {
-            continue;
-          }
-        }
-        // Fallback to searching installed apps
-        const calendarApp = installedApps.find(a =>
-          a.label.toLowerCase() === 'calendar' ||
-          a.packageName?.includes('calendar')
+        const opened = await launchInstalledApp(
+          ['com.google.android.calendar', 'com.samsung.android.calendar', 'com.android.calendar'],
+          (app) => app.label.toLowerCase() === 'calendar' || app.label.toLowerCase().includes('calendar') || app.packageName.toLowerCase().includes('calendar')
         );
-        if (calendarApp?.packageName) {
-          await RNLauncherKitHelper.launchApplication(calendarApp.packageName);
+
+        if (opened) {
+          return;
+        }
+      }
+
+      if (name === 'Contacts' && Platform.OS === 'android') {
+        const opened = await launchInstalledApp(
+          ['com.google.android.contacts', 'com.android.contacts', 'com.samsung.android.contacts', 'com.android.dialer'],
+          (app) =>
+            app.label.toLowerCase() === 'contacts' ||
+            app.label.toLowerCase() === 'phone' ||
+            app.label.toLowerCase().includes('contacts') ||
+            app.packageName.toLowerCase().includes('contacts') ||
+            app.packageName.toLowerCase().includes('dialer')
+        );
+
+        if (opened) {
           return;
         }
       }
 
       // For other apps - exact name match first
       if (Platform.OS === 'android') {
-        const exactMatch = installedApps.find(a => a.label.toLowerCase() === name.toLowerCase());
+        const apps = await getInstalledApps();
+        const exactMatch = apps.find(a => a.label.toLowerCase() === name.toLowerCase());
         if (exactMatch?.packageName) {
           await RNLauncherKitHelper.launchApplication(exactMatch.packageName);
           return;
         }
         // Partial match as fallback
-        const partialMatch = installedApps.find(a => a.label.toLowerCase().includes(name.toLowerCase()));
+        const partialMatch = apps.find(a => a.label.toLowerCase().includes(name.toLowerCase()));
         if (partialMatch?.packageName) {
           await RNLauncherKitHelper.launchApplication(partialMatch.packageName);
           return;
@@ -352,15 +509,22 @@ export default function ProductiveScreen() {
   };
 
   const openMusicApp = async () => {
-    const musicApps = ['com.spotify.music', 'com.google.android.apps.youtube.music', 'com.android.music', 'com.samsung.android.app.music'];
-    for (const pkg of musicApps) {
-      try {
-        await RNLauncherKitHelper.launchApplication(pkg);
-        return;
-      } catch (e) {
-        continue;
-      }
+    const opened = await launchInstalledApp(
+      ['com.spotify.music', 'com.google.android.apps.youtube.music', 'com.android.music', 'com.samsung.android.app.music', 'com.gaana', 'com.bsbportal.music', 'com.apple.android.music'],
+      (app) =>
+        app.label.toLowerCase().includes('music') ||
+        app.label.toLowerCase().includes('spotify') ||
+        app.label.toLowerCase().includes('youtube music') ||
+        app.label.toLowerCase().includes('gaana') ||
+        app.label.toLowerCase().includes('wynk') ||
+        app.label.toLowerCase().includes('jiosaavn') ||
+        app.packageName.toLowerCase().includes('music')
+    );
+
+    if (opened) {
+      return;
     }
+
     Alert.alert('Music unavailable', 'No music app could be opened on this device.');
   };
 
@@ -446,6 +610,16 @@ export default function ProductiveScreen() {
   }, [currentTime]);
 
   const nextFocusWindowLabel = `${String(currentTime.getHours()).padStart(2, '0')}:${String(currentTime.getMinutes()).padStart(2, '0')} now`;
+  const weatherIconName = useMemo(() => {
+    const condition = weatherInfo.condition.toLowerCase();
+
+    if (condition.includes('storm')) return 'thunderstorm';
+    if (condition.includes('rain') || condition.includes('drizzle') || condition.includes('shower')) return 'grain';
+    if (condition.includes('snow')) return 'ac-unit';
+    if (condition.includes('fog')) return 'blur-on';
+    if (condition.includes('cloud') || condition.includes('overcast')) return 'cloud';
+    return 'wb-sunny';
+  }, [weatherInfo.condition]);
 
   return (
     <ImageBackground
@@ -462,7 +636,7 @@ export default function ProductiveScreen() {
     >
       <View className="mb-8 flex-row items-start justify-between">
         <View>
-          <Text className="text-3xl font-light text-white">Productive</Text>
+          <Text className="text-3xl font-light text-white" style={launcherFontStyle}>Productive</Text>
           <View className="mt-2 flex-row items-center gap-3">
             <Pressable onPress={() => router.push('/(tabs)/productive')}>
               <MaterialIcons name="fiber-manual-record" size={10} color={settings.launcherColor} />
@@ -475,13 +649,13 @@ export default function ProductiveScreen() {
             </Pressable>
           </View>
         </View>
-        <Text className="text-sm text-zinc-400">
+        <Text className="text-sm text-zinc-400" style={launcherFontStyle}>
           {currentTime.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
         </Text>
       </View>
 
-      <Text className="mb-3 text-xs uppercase tracking-[3px] text-zinc-500">Daily dashboard</Text>
-      <Text className="mb-6 text-sm text-zinc-400">Shortcuts for your day.</Text>
+      <Text className="mb-3 text-xs uppercase tracking-[3px] text-zinc-500" style={launcherFontStyle}>Daily dashboard</Text>
+      <Text className="mb-6 text-sm text-zinc-400" style={launcherFontStyle}>Shortcuts for your day.</Text>
 
       <View
         className="mb-5 rounded-[28px] px-5 py-5"
@@ -493,16 +667,48 @@ export default function ProductiveScreen() {
       >
         <View className="mb-4 flex-row items-start justify-between">
           <View>
-            <Text className="text-xl font-medium text-white">{productiveSummary}</Text>
-            <Text className="mt-1 text-sm text-zinc-300">Focused launcher dashboard</Text>
+            <Text className="text-xl font-medium text-white" style={launcherFontStyle}>{productiveSummary}</Text>
+            <Text className="mt-1 text-sm text-zinc-300" style={launcherFontStyle}>Focused launcher dashboard</Text>
           </View>
           <View className="rounded-full px-3 py-2" style={{ backgroundColor: withAlpha(settings.launcherColor, subtleSurfaceAlpha) }}>
-            <Text className="text-xs uppercase tracking-[2px]" style={{ color: settings.launcherColor }}>
+            <Text className="text-xs uppercase tracking-[2px]" style={[{ color: settings.launcherColor }, launcherFontStyle]}>
               {nextFocusWindowLabel}
             </Text>
           </View>
         </View>
       </View>
+
+      <Pressable
+        onPress={loadWeather}
+        className="mb-5 rounded-[28px] px-5 py-5"
+        style={{
+          backgroundColor: withAlpha('#111827', surfaceAlpha),
+          borderWidth: 1,
+          borderColor: withAlpha(settings.launcherColor, '22'),
+        }}
+      >
+        <View className="mb-4 flex-row items-center justify-between">
+          <View className="flex-row items-center gap-3">
+            <View className="h-12 w-12 items-center justify-center rounded-2xl" style={{ backgroundColor: withAlpha(settings.launcherColor, subtleSurfaceAlpha) }}>
+              <MaterialIcons name={weatherIconName as any} size={24} color={settings.launcherColor} />
+            </View>
+            <View>
+              <Text className="text-lg font-medium text-white" style={launcherFontStyle}>Weather</Text>
+              <Text className="text-xs uppercase tracking-[2px] text-zinc-400" style={launcherFontStyle}>{weatherInfo.locationLabel}</Text>
+            </View>
+          </View>
+          <Text className="text-xs uppercase tracking-[2px]" style={[{ color: settings.launcherColor }, launcherFontStyle]}>
+            {weatherInfo.temperature !== null ? `${weatherInfo.temperature}°` : 'Refresh'}
+          </Text>
+        </View>
+
+        <View className="rounded-2xl px-4 py-4" style={{ backgroundColor: withAlpha('#020617', subtleSurfaceAlpha) }}>
+          <Text className="text-sm font-medium text-white" style={launcherFontStyle}>{weatherInfo.condition}</Text>
+          <Text className="mt-1 text-xs text-zinc-400" style={launcherFontStyle}>
+            {weatherInfo.high !== null && weatherInfo.low !== null ? `High ${weatherInfo.high}° • Low ${weatherInfo.low}°` : 'Weather details unavailable'}
+          </Text>
+        </View>
+      </Pressable>
 
       <View className="mb-5 flex-row flex-wrap justify-between gap-y-4">
         <Pressable
@@ -516,7 +722,7 @@ export default function ProductiveScreen() {
         >
           <View className="mb-4 flex-row items-center justify-between">
             <View className="flex-row items-center gap-3">
-              <View className="h-12 w-12 items-center justify-center rounded-2xl" style={{ backgroundColor: withAlpha(settings.launcherColor, '18') }}>
+              <View className="h-12 w-12 items-center justify-center rounded-2xl" style={{ backgroundColor: withAlpha(settings.launcherColor, subtleSurfaceAlpha) }}>
                 <MaterialIcons name="event" size={24} color={settings.launcherColor} />
               </View>
               <View>
@@ -538,7 +744,7 @@ export default function ProductiveScreen() {
               </View>
             ))
           ) : (
-            <View className="rounded-2xl px-4 py-4" style={{ backgroundColor: withAlpha('#020617', '18') }}>
+            <View className="rounded-2xl px-4 py-4" style={{ backgroundColor: withAlpha('#020617', subtleSurfaceAlpha) }}>
               <Text className="text-sm text-white">Open Calendar</Text>
             </View>
           )}
@@ -548,45 +754,47 @@ export default function ProductiveScreen() {
           onPress={openMusicApp}
           className="w-[48%] rounded-[28px] px-5 py-5"
           style={{
-            backgroundColor: withAlpha('#111827', '14'),
+            backgroundColor: withAlpha('#111827', surfaceAlpha),
             borderWidth: 1,
             borderColor: withAlpha(settings.launcherColor, '22'),
           }}
         >
-          <View className="mb-5 h-12 w-12 items-center justify-center rounded-2xl" style={{ backgroundColor: withAlpha(settings.launcherColor, '18') }}>
+          <View className="mb-5 h-12 w-12 items-center justify-center rounded-2xl" style={{ backgroundColor: withAlpha(settings.launcherColor, subtleSurfaceAlpha) }}>
             <MaterialIcons name="music-note" size={24} color={settings.launcherColor} />
           </View>
-          <Text className="text-lg font-medium text-white">Music</Text>
-          <Text className="mt-2 text-sm text-zinc-300">Open music app</Text>
+          <Text className="text-lg font-medium text-white">{musicInfo.appName}</Text>
+          <Text className="mt-2 text-sm text-zinc-300" numberOfLines={1}>{musicInfo.track}</Text>
+          <Text className="mt-1 text-xs uppercase tracking-[2px] text-zinc-500" numberOfLines={1}>{musicInfo.artist}</Text>
         </Pressable>
 
         <Pressable
           onPress={openEmailApp}
           className="w-[48%] rounded-[28px] px-5 py-5"
           style={{
-            backgroundColor: withAlpha('#111827', '14'),
+            backgroundColor: withAlpha('#111827', surfaceAlpha),
             borderWidth: 1,
             borderColor: withAlpha(settings.launcherColor, '22'),
           }}
         >
-          <View className="mb-5 h-12 w-12 items-center justify-center rounded-2xl" style={{ backgroundColor: withAlpha(settings.launcherColor, '18') }}>
+          <View className="mb-5 h-12 w-12 items-center justify-center rounded-2xl" style={{ backgroundColor: withAlpha(settings.launcherColor, subtleSurfaceAlpha) }}>
             <MaterialIcons name="email" size={24} color={settings.launcherColor} />
           </View>
-          <Text className="text-lg font-medium text-white">Email</Text>
-          <Text className="mt-2 text-sm text-zinc-300">Open email app</Text>
+          <Text className="text-lg font-medium text-white">{emailInfo.appName}</Text>
+          <Text className="mt-2 text-sm text-zinc-300" numberOfLines={1}>{emailInfo.subject}</Text>
+          <Text className="mt-1 text-xs uppercase tracking-[2px] text-zinc-500" numberOfLines={1}>{emailInfo.unreadCount > 0 ? `${emailInfo.unreadCount} unread` : 'Shortcut only'}</Text>
         </Pressable>
 
         <View
           className="w-full rounded-[28px] px-5 py-5"
           style={{
-            backgroundColor: withAlpha('#111827', '14'),
+            backgroundColor: withAlpha('#111827', surfaceAlpha),
             borderWidth: 1,
             borderColor: withAlpha(settings.launcherColor, '22'),
           }}
         >
           <View className="mb-4 flex-row items-center justify-between">
             <View className="flex-row items-center gap-3">
-              <View className="h-12 w-12 items-center justify-center rounded-2xl" style={{ backgroundColor: withAlpha(settings.launcherColor, '18') }}>
+              <View className="h-12 w-12 items-center justify-center rounded-2xl" style={{ backgroundColor: withAlpha(settings.launcherColor, subtleSurfaceAlpha) }}>
                 <MaterialIcons name="check-circle" size={24} color={settings.launcherColor} />
               </View>
               <View>
@@ -621,14 +829,14 @@ export default function ProductiveScreen() {
         <View
           className="w-full rounded-[28px] px-5 py-5"
           style={{
-            backgroundColor: withAlpha('#111827', '14'),
+            backgroundColor: withAlpha('#111827', surfaceAlpha),
             borderWidth: 1,
             borderColor: withAlpha(settings.launcherColor, '22'),
           }}
         >
           <View className="mb-4 flex-row items-center justify-between">
             <View className="flex-row items-center gap-3">
-              <View className="h-12 w-12 items-center justify-center rounded-2xl" style={{ backgroundColor: withAlpha(settings.launcherColor, '18') }}>
+              <View className="h-12 w-12 items-center justify-center rounded-2xl" style={{ backgroundColor: withAlpha(settings.launcherColor, subtleSurfaceAlpha) }}>
                 <MaterialIcons name="contacts" size={24} color={settings.launcherColor} />
               </View>
               <View>
@@ -645,9 +853,9 @@ export default function ProductiveScreen() {
                 key={contact.id}
                 onPress={() => callContact(contact)}
                 className="w-[31.5%] rounded-2xl px-3 py-4 items-center"
-                style={{ backgroundColor: withAlpha('#020617', '18') }}
+                style={{ backgroundColor: withAlpha('#020617', subtleSurfaceAlpha) }}
               >
-                <View className="mb-3 h-12 w-12 items-center justify-center rounded-full" style={{ backgroundColor: withAlpha(settings.launcherColor, '18') }}>
+                <View className="mb-3 h-12 w-12 items-center justify-center rounded-full" style={{ backgroundColor: withAlpha(settings.launcherColor, subtleSurfaceAlpha) }}>
                   <MaterialIcons name="person" size={22} color={settings.launcherColor} />
                 </View>
                 <Text className="text-sm font-medium text-white text-center" numberOfLines={1}>{contact.name}</Text>
