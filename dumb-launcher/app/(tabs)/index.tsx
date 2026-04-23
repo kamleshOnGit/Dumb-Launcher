@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { View, Text, ScrollView, Pressable, Alert, PanResponder, Platform, ImageBackground } from 'react-native';
+import { View, Text, ScrollView, Pressable, Alert, PanResponder, Platform, ImageBackground, Image } from 'react-native';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { Linking } from 'react-native';
 import { router } from 'expo-router';
@@ -32,11 +32,37 @@ export default function TabOneScreen() {
     });
   };
 
-  // Real apps that can be launched
-  const preferredApps = useMemo(
-    () => ALL_LAUNCHER_APPS.filter((app) => HOME_LAUNCHER_APP_NAMES.includes(app.name)),
-    []
-  );
+  const [installedApps, setInstalledApps] = React.useState<any[]>([]);
+  const [isLoading, setIsLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    const loadApps = async () => {
+      if (Platform.OS === 'android') {
+        try {
+          const apps = await InstalledApps.getSortedApps({ includeVersion: false, includeAccentColor: true });
+          setInstalledApps(apps);
+        } catch (error) {
+          setInstalledApps(ALL_LAUNCHER_APPS.map(app => ({ label: app.name, packageName: app.id, icon: app.icon })));
+        }
+      } else {
+        setInstalledApps(ALL_LAUNCHER_APPS.map(app => ({ label: app.name, scheme: app.scheme, icon: app.icon })));
+      }
+      setIsLoading(false);
+    };
+    loadApps();
+  }, []);
+
+  const preferredApps = useMemo(() => {
+    return settings.homeShortcutPackages.map(pkg => {
+      const app = installedApps.find(a => (a.packageName === pkg) || (a.label === pkg));
+      if (app) return app;
+      
+      const staticApp = ALL_LAUNCHER_APPS.find(a => a.name === pkg || a.id === pkg);
+      if (staticApp) return { label: staticApp.name, packageName: staticApp.id, icon: staticApp.icon, isStatic: true, scheme: staticApp.scheme };
+      
+      return null;
+    }).filter(Boolean);
+  }, [settings.homeShortcutPackages, installedApps]);
 
   const swipeResponder = useMemo(
     () => PanResponder.create({
@@ -54,10 +80,23 @@ export default function TabOneScreen() {
     []
   );
 
-  const launchApp = async (app: { name: string; scheme: string }) => {
+  const launchApp = async (app: any) => {
     try {
-      if (Platform.OS === 'android' && app.name === 'Camera') {
-        const cameraPackages = ['com.android.camera', 'com.google.android.GoogleCamera', 'com.samsung.android.camera', 'com.sec.android.app.camera', 'com.oplus.camera', 'com.oneplus.camera', 'com.motorola.camera3', 'org.lineageos.snap'];
+      const appName = app.label || app.name;
+      const pkgName = app.packageName;
+
+      if (Platform.OS === 'android' && (appName === 'Camera' || (pkgName && pkgName.includes('camera')))) {
+        const cameraPackages = [
+          'com.android.camera',
+          'com.google.android.GoogleCamera',
+          'com.samsung.android.camera',
+          'com.sec.android.app.camera',
+          'com.oplus.camera',
+          'com.oneplus.camera',
+          'com.motorola.camera3',
+          'org.lineageos.snap',
+          'com.huawei.camera'
+        ];
 
         for (const packageName of cameraPackages) {
           try {
@@ -69,17 +108,10 @@ export default function TabOneScreen() {
         }
 
         const androidApps = await InstalledApps.getSortedApps({ includeVersion: false, includeAccentColor: false });
-        const exactMatch = androidApps.find((installedApp) => installedApp.label.toLowerCase() === 'camera' || installedApp.label.toLowerCase() === 'camera go');
-        if (exactMatch?.packageName) {
-          await RNLauncherKitHelper.launchApplication(exactMatch.packageName);
-          return;
-        }
-
         const cameraApp = androidApps.find((installedApp) =>
           installedApp.label.toLowerCase().includes('camera') ||
           installedApp.packageName.toLowerCase().includes('camera') ||
-          installedApp.packageName.toLowerCase().includes('gcam') ||
-          installedApp.packageName.toLowerCase().includes('snap')
+          installedApp.packageName.toLowerCase().includes('gcam')
         );
 
         if (cameraApp?.packageName) {
@@ -89,28 +121,15 @@ export default function TabOneScreen() {
 
         if (typeof Linking.sendIntent === 'function') {
           try {
-            await Linking.sendIntent('android.media.action.IMAGE_CAPTURE');
+            await Linking.sendIntent('android.media.action.STILL_IMAGE_CAMERA');
             return;
           } catch (error) {
-            // continue to URL fallback
-          }
-        }
-
-        const cameraSchemes = ['camera://', 'camera:', 'android.media.action.IMAGE_CAPTURE'];
-        for (const scheme of cameraSchemes) {
-          try {
-            const canOpenCamera = await Linking.canOpenURL(scheme);
-            if (canOpenCamera) {
-              await Linking.openURL(scheme);
-              return;
-            }
-          } catch (error) {
-            continue;
+            // continue
           }
         }
       }
 
-      if (Platform.OS === 'android' && app.name === 'Contacts') {
+      if (Platform.OS === 'android' && (appName === 'Contacts' || (pkgName && pkgName.includes('contacts')))) {
         const contactsPackages = ['com.google.android.contacts', 'com.android.contacts', 'com.samsung.android.contacts', 'com.android.dialer'];
 
         for (const packageName of contactsPackages) {
@@ -137,7 +156,7 @@ export default function TabOneScreen() {
         }
       }
 
-      if (Platform.OS === 'android' && app.name === 'Calendar') {
+      if (Platform.OS === 'android' && (appName === 'Calendar' || (pkgName && pkgName.includes('calendar')))) {
         const calendarPackages = ['com.google.android.calendar', 'com.samsung.android.calendar', 'com.android.calendar'];
 
         for (const packageName of calendarPackages) {
@@ -160,14 +179,22 @@ export default function TabOneScreen() {
         }
       }
 
-      const canOpen = await Linking.canOpenURL(app.scheme);
-      if (canOpen) {
-        await Linking.openURL(app.scheme);
-      } else {
-        Alert.alert(`${app.name} not available`, `Cannot open ${app.name} on this device.`);
+      if (Platform.OS === 'android' && pkgName) {
+        await RNLauncherKitHelper.launchApplication(pkgName);
+        return;
       }
+
+      if (app.scheme) {
+        const canOpen = await Linking.canOpenURL(app.scheme);
+        if (canOpen) {
+          await Linking.openURL(app.scheme);
+          return;
+        }
+      }
+      
+      Alert.alert(`${appName} not available`, `Cannot open ${appName} on this device.`);
     } catch (error) {
-      Alert.alert('Error', `Failed to open ${app.name}`);
+      Alert.alert('Error', `Failed to open ${app.label || app.name}`);
     }
   };
 
@@ -262,17 +289,21 @@ export default function TabOneScreen() {
 
       {/* App List */}
       <ScrollView className="flex-1">
-        {preferredApps.map((app) => (
+        {preferredApps.map((app, index) => (
           <Pressable
-            key={app.name}
+            key={`${app.packageName || app.label || app.name}-${index}`}
             onPress={() => launchApp(app)}
             className="mb-4 flex-row items-center gap-4"
           >
             <View className="h-14 w-14 items-center justify-center rounded-2xl" style={{ backgroundColor: withAlpha(settings.launcherColor, surfaceAlpha) }}>
-              <MaterialIcons name={app.icon} size={26} color={settings.launcherColor} />
+              {typeof app.icon === 'string' && app.icon.length > 50 ? (
+                <Image source={{ uri: app.icon.startsWith('data:') ? app.icon : `data:image/png;base64,${app.icon}` }} style={{ width: 30, height: 30 }} />
+              ) : (
+                <MaterialIcons name={(app.icon || 'apps') as any} size={26} color={settings.launcherColor} />
+              )}
             </View>
             <Text className="text-2xl font-light" style={[{ color: settings.launcherColor }, launcherFontStyle]}>
-              {app.name}
+              {app.label || app.name}
             </Text>
           </Pressable>
         ))}

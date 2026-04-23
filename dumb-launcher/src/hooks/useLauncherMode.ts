@@ -22,6 +22,7 @@ export interface LauncherSettings {
   followSystemTheme: boolean;
   followSystemFont: boolean;
   followSystemWallpaper: boolean;
+  homeShortcutPackages: string[];
 }
 
 interface LauncherModeContextValue {
@@ -55,6 +56,7 @@ const defaultSettings: LauncherSettings = {
   followSystemTheme: true,
   followSystemFont: true,
   followSystemWallpaper: true,
+  homeShortcutPackages: ['com.android.dialer', 'com.android.messaging', 'com.android.contacts', 'com.android.calendar', 'com.android.camera'],
 };
 
 type PersistedLauncherSettings = Partial<LauncherSettings>;

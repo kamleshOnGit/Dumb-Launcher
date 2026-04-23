@@ -144,7 +144,7 @@ export default function TabTwoScreen() {
   const { mode, currentTime, settings, updateSettings, canPeekApp, requestAppAccess } = useLauncherMode();
   const [search, setSearch] = useState('');
   const [showSettings, setShowSettings] = useState(false);
-  const [activePicker, setActivePicker] = useState<'focusPeekApps' | 'productivePeekApps' | 'favoriteContactIds' | null>(null);
+  const [activePicker, setActivePicker] = useState<'focusPeekApps' | 'productivePeekApps' | 'favoriteContactIds' | 'homeShortcuts' | null>(null);
   const [installedApps, setInstalledApps] = useState<DeviceApp[]>([]);
   const [contacts, setContacts] = useState<DeviceContact[]>([]);
   const [isLoadingApps, setIsLoadingApps] = useState(Platform.OS === 'android');
@@ -342,8 +342,17 @@ export default function TabTwoScreen() {
 
       if (Platform.OS === 'android') {
         if (app.name === 'Camera') {
-          const androidApps = await InstalledApps.getSortedApps({ includeVersion: false, includeAccentColor: false });
-          const cameraPackages = ['com.android.camera', 'com.google.android.GoogleCamera', 'com.samsung.android.camera', 'com.sec.android.app.camera', 'com.oplus.camera', 'com.oneplus.camera', 'com.motorola.camera3', 'org.lineageos.snap'];
+          const cameraPackages = [
+            'com.android.camera',
+            'com.google.android.GoogleCamera',
+            'com.samsung.android.camera',
+            'com.sec.android.app.camera',
+            'com.oplus.camera',
+            'com.oneplus.camera',
+            'com.motorola.camera3',
+            'org.lineageos.snap',
+            'com.huawei.camera'
+          ];
 
           for (const packageName of cameraPackages) {
             try {
@@ -354,18 +363,25 @@ export default function TabTwoScreen() {
             }
           }
 
+          const androidApps = await InstalledApps.getSortedApps({ includeVersion: false, includeAccentColor: false });
           const cameraApp = androidApps.find((installedApp) =>
-            installedApp.label.toLowerCase() === 'camera' ||
-            installedApp.label.toLowerCase() === 'camera go' ||
             installedApp.label.toLowerCase().includes('camera') ||
             installedApp.packageName.toLowerCase().includes('camera') ||
-            installedApp.packageName.toLowerCase().includes('gcam') ||
-            installedApp.packageName.toLowerCase().includes('snap')
+            installedApp.packageName.toLowerCase().includes('gcam')
           );
 
           if (cameraApp?.packageName) {
             await RNLauncherKitHelper.launchApplication(cameraApp.packageName);
             return;
+          }
+
+          if (typeof Linking.sendIntent === 'function') {
+            try {
+              await Linking.sendIntent('android.media.action.STILL_IMAGE_CAMERA');
+              return;
+            } catch (error) {
+              // continue
+            }
           }
         }
 
@@ -493,6 +509,15 @@ export default function TabTwoScreen() {
       : [...currentApps, appName];
 
     updateSettings({ [key]: nextApps } as Pick<typeof settings, typeof key>);
+  };
+
+  const toggleHomeShortcut = (pkg: string) => {
+    const currentPackages = settings.homeShortcutPackages || [];
+    const nextPackages = currentPackages.includes(pkg)
+      ? currentPackages.filter((item) => item !== pkg)
+      : [...currentPackages, pkg].slice(0, 8);
+
+    updateSettings({ homeShortcutPackages: nextPackages });
   };
 
   const toggleFavoriteContact = (contactId: string) => {
@@ -654,6 +679,48 @@ export default function TabTwoScreen() {
               />
             </View>
 
+            <Text className="mb-2 text-xs uppercase tracking-[2px] text-zinc-500">Home screen shortcuts</Text>
+            <View className="mb-4 rounded-2xl bg-zinc-900 px-4 py-3">
+              <Pressable onPress={() => setActivePicker((current) => current === 'homeShortcuts' ? null : 'homeShortcuts')} className="flex-row items-center justify-between">
+                <View className="flex-1 pr-4">
+                  <Text className="mb-2 text-xs text-zinc-500">Selected apps</Text>
+                  <Text className="text-sm text-white">
+                    {settings.homeShortcutPackages?.length 
+                      ? settings.homeShortcutPackages.map(pkg => {
+                          const app = installedApps.find(a => a.packageName === pkg || a.id === pkg || a.scheme === pkg);
+                          return app?.name || pkg.split('.').pop() || pkg;
+                        }).join(', ') 
+                      : 'Select apps'}
+                  </Text>
+                </View>
+                <MaterialIcons name={activePicker === 'homeShortcuts' ? 'keyboard-arrow-up' : 'keyboard-arrow-down'} size={20} color={settings.launcherColor} />
+              </Pressable>
+
+              {activePicker === 'homeShortcuts' && (
+                <View className="mt-4 flex-row flex-wrap gap-2">
+                  {installedApps.map((app) => {
+                    const identifier = app.packageName || app.scheme || app.id;
+                    const isSelected = settings.homeShortcutPackages?.includes(identifier);
+
+                    return (
+                      <Pressable
+                        key={`home-${app.id}`}
+                        onPress={() => toggleHomeShortcut(identifier)}
+                        className="flex-row items-center gap-2 rounded-2xl border px-3 py-2"
+                        style={{
+                          borderColor: isSelected ? settings.launcherColor : '#27272a',
+                          backgroundColor: isSelected ? withAlpha(settings.launcherColor, '22') : '#18181b',
+                        }}
+                      >
+                        {renderAppVisual(app)}
+                        <Text className="text-sm" style={{ color: isSelected ? '#ffffff' : '#d4d4d8' }}>{app.name}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              )}
+            </View>
+
             <Text className="mb-2 text-xs uppercase tracking-[2px] text-zinc-500">Surface opacity</Text>
             <View className="mb-4 rounded-2xl bg-zinc-900 px-4 py-3">
               <Text className="mb-2 text-xs text-zinc-500">Cards, buttons and clock tint (0-100)</Text>
@@ -746,39 +813,51 @@ export default function TabTwoScreen() {
                       </Pressable>
                     );
                   }) : (
-                    <Text className="text-sm text-zinc-500">Allow contacts permission to choose favorites.</Text>
+                    <View className="items-center py-2">
+                      <Text className="mb-3 text-sm text-zinc-500">No contacts found or permission missing.</Text>
+                      <Pressable 
+                        onPress={requestImportantPermissions}
+                        className="rounded-xl bg-zinc-800 px-4 py-2 border border-white/5"
+                        style={{ backgroundColor: withAlpha(settings.launcherColor, '22') }}
+                      >
+                        <Text className="text-xs text-white" style={launcherFontStyle}>Grant Permissions</Text>
+                      </Pressable>
+                    </View>
                   )}
                 </View>
               )}
             </View>
 
             <Text className="mb-2 text-xs uppercase tracking-[2px] text-zinc-500">Launcher color</Text>
-            <View className="mb-4 rounded-2xl bg-zinc-900 px-4 py-4">
-              <Text className="mb-2 text-xs text-zinc-500" style={launcherFontStyle}>Hex color</Text>
-              <TextInput
-                value={colorInput}
-                onChangeText={applyHexColor}
-                autoCapitalize="characters"
-                placeholder="#3B82F6"
-                placeholderTextColor="#71717a"
-                className="rounded-xl border border-white/10 px-3 py-3 text-white"
-                style={launcherFontStyle}
-              />
-              <View className="mt-4 flex-row gap-3">
-                {(['r', 'g', 'b'] as const).map((channel) => (
-                  <View key={channel} className="flex-1 rounded-2xl bg-black/30 px-3 py-3">
-                    <Text className="mb-2 text-xs uppercase tracking-[2px] text-zinc-500" style={launcherFontStyle}>{channel}</Text>
-                    <TextInput
-                      value={String(currentRgb[channel])}
-                      onChangeText={(value) => updateRgbChannel(channel, value)}
-                      keyboardType="number-pad"
-                      className="text-white"
-                      style={launcherFontStyle}
-                    />
-                  </View>
+            <View className="mb-4 rounded-2xl bg-zinc-900 px-4 py-5">
+              <Text className="mb-2 text-xs text-zinc-500" style={launcherFontStyle}>Curated palette</Text>
+              <View className="flex-row flex-wrap gap-3 mb-6">
+                {['#3B82F6', '#10B981', '#8B5CF6', '#F43F5E', '#F59E0B', '#6366F1', '#71717A', '#FFFFFF'].map((color) => (
+                  <Pressable
+                    key={color}
+                    onPress={() => applyHexColor(color)}
+                    className="h-10 w-10 rounded-full border-2"
+                    style={{ 
+                      backgroundColor: color, 
+                      borderColor: settings.launcherColor === color ? '#ffffff' : 'transparent'
+                    }}
+                  />
                 ))}
               </View>
-              <View className="mt-4 h-12 rounded-2xl border border-white/10" style={{ backgroundColor: settings.launcherColor }} />
+
+              <Text className="mb-2 text-xs text-zinc-500" style={launcherFontStyle}>Custom Hex</Text>
+              <View className="flex-row items-center gap-3">
+                <TextInput
+                  value={colorInput}
+                  onChangeText={applyHexColor}
+                  autoCapitalize="characters"
+                  placeholder="#3B82F6"
+                  placeholderTextColor="#71717a"
+                  className="flex-1 rounded-xl border border-white/10 px-3 py-3 text-white"
+                  style={launcherFontStyle}
+                />
+                <View className="h-12 w-12 rounded-xl border border-white/10" style={{ backgroundColor: settings.launcherColor }} />
+              </View>
             </View>
 
             <Text className="mb-2 text-xs uppercase tracking-[2px] text-zinc-500">Launcher font</Text>
