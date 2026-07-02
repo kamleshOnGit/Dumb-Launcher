@@ -46,7 +46,7 @@ export function useMode() {
   }, [isFocusWindow, launcherMode, setLauncherMode]);
 
   useEffect(() => {
-    let interval: NodeJS.Timeout;
+    let interval: ReturnType<typeof setInterval>;
     
     if (isActive && timeRemaining > 0) {
       interval = setInterval(() => {

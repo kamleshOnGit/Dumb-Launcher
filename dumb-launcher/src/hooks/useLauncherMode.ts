@@ -23,6 +23,11 @@ export interface LauncherSettings {
   followSystemFont: boolean;
   followSystemWallpaper: boolean;
   homeShortcutPackages: string[];
+  iconBackgroundColor: string;
+  iconForegroundColor: string;
+  cardBackgroundColor: string;
+  textColor: string;
+  useSeparateColors: boolean;
 }
 
 interface LauncherModeContextValue {
@@ -56,7 +61,12 @@ const defaultSettings: LauncherSettings = {
   followSystemTheme: true,
   followSystemFont: true,
   followSystemWallpaper: true,
-  homeShortcutPackages: ['com.android.dialer', 'com.android.messaging', 'com.android.contacts', 'com.android.calendar', 'com.android.camera'],
+  homeShortcutPackages: ['Phone', 'Messages', 'Contacts', 'Calendar', 'Camera'],
+  iconBackgroundColor: '#3B82F6',
+  iconForegroundColor: '#FFFFFF',
+  cardBackgroundColor: '#18181B',
+  textColor: '#FFFFFF',
+  useSeparateColors: false,
 };
 
 type PersistedLauncherSettings = Partial<LauncherSettings>;
@@ -82,6 +92,33 @@ export function LauncherModeProvider({ children }: { children: React.ReactNode }
         }
 
         const parsedSettings = JSON.parse(savedSettings) as PersistedLauncherSettings;
+
+        // Migrate old package-name shortcuts to app names
+        const packageToName: Record<string, string> = {
+          'com.android.dialer': 'Phone',
+          'com.android.contacts': 'Contacts',
+          'com.android.messaging': 'Messages',
+          'com.android.calendar': 'Calendar',
+          'com.android.camera': 'Camera',
+          'com.google.android.dialer': 'Phone',
+          'com.google.android.contacts': 'Contacts',
+          'com.google.android.apps.messaging': 'Messages',
+          'com.google.android.calendar': 'Calendar',
+          'com.google.android.GoogleCamera': 'Camera',
+          'com.oplus.camera': 'Camera',
+          'com.samsung.android.contacts': 'Contacts',
+          'com.samsung.android.calendar': 'Calendar',
+          'com.samsung.android.app.camera': 'Camera',
+        };
+
+        if (parsedSettings.homeShortcutPackages) {
+          const migrated = parsedSettings.homeShortcutPackages.map((pkg: string) =>
+            packageToName[pkg] || pkg
+          );
+          // Deduplicate while preserving order
+          parsedSettings.homeShortcutPackages = [...new Set(migrated)];
+        }
+
         setSettings((current) => ({ ...current, ...parsedSettings }));
       } catch (error) {
         console.warn('Failed to load launcher settings', error);

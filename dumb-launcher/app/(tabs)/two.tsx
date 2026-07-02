@@ -149,10 +149,23 @@ export default function TabTwoScreen() {
   const [contacts, setContacts] = useState<DeviceContact[]>([]);
   const [isLoadingApps, setIsLoadingApps] = useState(Platform.OS === 'android');
   const [colorInput, setColorInput] = useState(settings.launcherColor);
+  const [contactPermissionStatus, setContactPermissionStatus] = useState<'granted' | 'denied' | 'unknown'>('unknown');
+
+  // Separate color input states for editing
+  const [iconBgInput, setIconBgInput] = useState(settings.iconBackgroundColor);
+  const [iconFgInput, setIconFgInput] = useState(settings.iconForegroundColor);
+  const [cardBgInput, setCardBgInput] = useState(settings.cardBackgroundColor);
+  const [textColorInput, setTextColorInput] = useState(settings.textColor);
 
   const launcherFontStyle = settings.followSystemFont || settings.launcherFontFamily === 'System'
     ? undefined
     : { fontFamily: settings.launcherFontFamily };
+
+  // Separate color helpers for better contrast control
+  const iconBgColor = settings.useSeparateColors ? settings.iconBackgroundColor : settings.launcherColor;
+  const iconFgColor = settings.useSeparateColors ? settings.iconForegroundColor : settings.launcherColor;
+  const textColor = settings.useSeparateColors ? settings.textColor : '#FFFFFF';
+  const cardBgColor = settings.useSeparateColors ? settings.cardBackgroundColor : '#18181b';
 
   const formatTime = (date: Date) => {
     return date.toLocaleTimeString('en-US', {
@@ -253,51 +266,69 @@ export default function TabTwoScreen() {
     setColorInput(settings.launcherColor);
   }, [settings.launcherColor]);
 
+  // Sync separate color inputs when settings change
   useEffect(() => {
-    let isMounted = true;
+    setIconBgInput(settings.iconBackgroundColor);
+  }, [settings.iconBackgroundColor]);
 
-    const loadContacts = async () => {
-      if (!ContactsModule) {
+  useEffect(() => {
+    setIconFgInput(settings.iconForegroundColor);
+  }, [settings.iconForegroundColor]);
+
+  useEffect(() => {
+    setCardBgInput(settings.cardBackgroundColor);
+  }, [settings.cardBackgroundColor]);
+
+  useEffect(() => {
+    setTextColorInput(settings.textColor);
+  }, [settings.textColor]);
+
+  const loadContacts = async (requestIfNeeded = true) => {
+    if (!ContactsModule) {
+      setContactPermissionStatus('denied');
+      return;
+    }
+
+    try {
+      // First check existing permission
+      const existingPermission = await ContactsModule.getPermissionsAsync();
+
+      if (existingPermission.status === 'granted') {
+        setContactPermissionStatus('granted');
+      } else if (requestIfNeeded) {
+        const permission = await ContactsModule.requestPermissionsAsync();
+        setContactPermissionStatus(permission.status === 'granted' ? 'granted' : 'denied');
+
+        if (permission.status !== 'granted') {
+          return;
+        }
+      } else {
+        setContactPermissionStatus('denied');
         return;
       }
 
-      try {
-        const permission = await ContactsModule.requestPermissionsAsync();
+      const response = await ContactsModule.getContactsAsync({
+        fields: [ContactsModule.Fields.PhoneNumbers],
+        sort: ContactsModule.SortTypes.FirstName,
+      });
 
-        if (permission.status !== 'granted' || !isMounted) {
-          return;
-        }
+      const normalizedContacts = response.data
+        .filter((contact: { name?: string }) => !!contact.name)
+        .map((contact: { id: string; lookupKey?: string; name?: string; phoneNumbers?: Array<{ number?: string }> }) => ({
+          id: contact.lookupKey || contact.id,
+          name: contact.name || 'Unknown',
+          phone: contact.phoneNumbers?.[0]?.number,
+        }));
 
-        const response = await ContactsModule.getContactsAsync({
-          fields: [ContactsModule.Fields.PhoneNumbers],
-          sort: ContactsModule.SortTypes.FirstName,
-        });
+      setContacts(normalizedContacts);
+    } catch (error) {
+      setContacts([]);
+      setContactPermissionStatus('denied');
+    }
+  };
 
-        if (!isMounted) {
-          return;
-        }
-
-        const normalizedContacts = response.data
-          .filter((contact: { name?: string }) => !!contact.name)
-          .map((contact: { id: string; lookupKey?: string; name?: string; phoneNumbers?: Array<{ number?: string }> }) => ({
-            id: contact.lookupKey || contact.id,
-            name: contact.name || 'Unknown',
-            phone: contact.phoneNumbers?.[0]?.number,
-          }));
-
-        setContacts(normalizedContacts);
-      } catch (error) {
-        if (isMounted) {
-          setContacts([]);
-        }
-      }
-    };
-
+  useEffect(() => {
     loadContacts();
-
-    return () => {
-      isMounted = false;
-    };
   }, []);
 
   const filteredApps = installedApps.filter((app) => app.name.toLowerCase().includes(search.toLowerCase()));
@@ -335,120 +366,77 @@ export default function TabTwoScreen() {
         return;
       }
 
-      if (Platform.OS === 'android' && 'packageName' in app && app.packageName) {
-        await RNLauncherKitHelper.launchApplication(app.packageName);
-        return;
-      }
+      const appName = (app.name || '').toLowerCase();
+      const pkgName = ('packageName' in app && app.packageName) || '';
 
       if (Platform.OS === 'android') {
-        if (app.name === 'Camera') {
-          const cameraPackages = [
-            'com.android.camera',
-            'com.google.android.GoogleCamera',
-            'com.samsung.android.camera',
-            'com.sec.android.app.camera',
-            'com.oplus.camera',
-            'com.oneplus.camera',
-            'com.motorola.camera3',
-            'org.lineageos.snap',
-            'com.huawei.camera'
-          ];
+        // Universal system apps — use intent schemes that work on ALL Android devices
+        if (appName === 'phone' || appName === 'dialer' || pkgName.includes('dialer')) {
+          try { await Linking.openURL('tel:'); return; } catch (e) {}
+        }
 
-          for (const packageName of cameraPackages) {
-            try {
-              await RNLauncherKitHelper.launchApplication(packageName);
-              return;
-            } catch (error) {
-              continue;
-            }
-          }
+        if (appName === 'messages' || appName === 'message' || appName === 'messaging' || appName === 'sms' || pkgName.includes('messaging') || pkgName.includes('message')) {
+          try { await Linking.openURL('sms:'); return; } catch (e) {}
+        }
 
-          const androidApps = await InstalledApps.getSortedApps({ includeVersion: false, includeAccentColor: false });
-          const cameraApp = androidApps.find((installedApp) =>
-            installedApp.label.toLowerCase().includes('camera') ||
-            installedApp.packageName.toLowerCase().includes('camera') ||
-            installedApp.packageName.toLowerCase().includes('gcam')
-          );
+        if (appName === 'contacts' || appName === 'people' || pkgName.includes('contacts')) {
+          try { await Linking.openURL('content://com.android.contacts/contacts'); return; } catch (e) {}
+        }
 
-          if (cameraApp?.packageName) {
-            await RNLauncherKitHelper.launchApplication(cameraApp.packageName);
-            return;
-          }
+        if (appName === 'calendar' || pkgName.includes('calendar')) {
+          try { await Linking.openURL('content://com.android.calendar/time'); return; } catch (e) {}
+        }
 
+        if (appName === 'camera' || pkgName.includes('camera') || pkgName.includes('gcam')) {
           if (typeof Linking.sendIntent === 'function') {
-            try {
-              await Linking.sendIntent('android.media.action.STILL_IMAGE_CAMERA');
-              return;
-            } catch (error) {
-              // continue
-            }
+            try { await Linking.sendIntent('android.media.action.STILL_IMAGE_CAMERA'); return; } catch (e) {}
           }
         }
 
-        if (app.name === 'Contacts') {
-          const androidApps = await InstalledApps.getSortedApps({ includeVersion: false, includeAccentColor: false });
-          const contactsPackages = ['com.google.android.contacts', 'com.android.contacts', 'com.samsung.android.contacts', 'com.android.dialer'];
-
-          for (const packageName of contactsPackages) {
-            try {
-              await RNLauncherKitHelper.launchApplication(packageName);
-              return;
-            } catch (error) {
-              continue;
-            }
+        if (appName === 'settings' || pkgName.includes('settings')) {
+          if (typeof Linking.sendIntent === 'function') {
+            try { await Linking.sendIntent('android.settings.SETTINGS'); return; } catch (e) {}
           }
+        }
 
-          const contactsApp = androidApps.find((installedApp) =>
-            installedApp.label.toLowerCase() === 'contacts' ||
-            installedApp.label.toLowerCase() === 'phone' ||
-            installedApp.label.toLowerCase().includes('contacts') ||
-            installedApp.packageName.toLowerCase().includes('contacts') ||
-            installedApp.packageName.toLowerCase().includes('dialer')
-          );
+        if (appName === 'calculator' || pkgName.includes('calculator')) {
+          if (typeof Linking.sendIntent === 'function') {
+            try { await Linking.sendIntent('android.intent.action.CALCULATOR'); return; } catch (e) {}
+          }
+        }
 
-          if (contactsApp?.packageName) {
-            await RNLauncherKitHelper.launchApplication(contactsApp.packageName);
+        // Generic apps — launch by package name
+        if (pkgName) {
+          try {
+            await RNLauncherKitHelper.launchApplication(pkgName);
             return;
-          }
+          } catch (e) {}
         }
 
-        if (app.name === 'Calendar') {
+        // Fallback: search installed apps by name
+        if (appName) {
           const androidApps = await InstalledApps.getSortedApps({ includeVersion: false, includeAccentColor: false });
-          const calendarPackages = ['com.google.android.calendar', 'com.samsung.android.calendar', 'com.android.calendar'];
-
-          for (const packageName of calendarPackages) {
-            try {
-              await RNLauncherKitHelper.launchApplication(packageName);
-              return;
-            } catch (error) {
-              continue;
-            }
-          }
-
-          const calendarApp = androidApps.find((installedApp) =>
-            installedApp.label.toLowerCase() === 'calendar' ||
-            installedApp.label.toLowerCase().includes('calendar') ||
-            installedApp.packageName.toLowerCase().includes('calendar')
+          const match = androidApps.find(a =>
+            a.label?.toLowerCase() === appName ||
+            a.label?.toLowerCase().includes(appName)
           );
-
-          if (calendarApp?.packageName) {
-            await RNLauncherKitHelper.launchApplication(calendarApp.packageName);
+          if (match?.packageName) {
+            await RNLauncherKitHelper.launchApplication(match.packageName);
             return;
           }
         }
       }
 
-      if (!('scheme' in app) || !app.scheme) {
-        Alert.alert(`${app.name} not available`, `Cannot open ${app.name} on this device.`);
-        return;
+      // Non-Android or scheme-based fallback
+      if ('scheme' in app && app.scheme) {
+        const canOpen = await Linking.canOpenURL(app.scheme);
+        if (canOpen) {
+          await Linking.openURL(app.scheme);
+          return;
+        }
       }
 
-      const canOpen = await Linking.canOpenURL(app.scheme);
-      if (canOpen) {
-        await Linking.openURL(app.scheme);
-      } else {
-        Alert.alert(`${app.name} not available`, `Cannot open ${app.name} on this device.`);
-      }
+      Alert.alert(`${app.name} not available`, `Cannot open ${app.name} on this device.`);
     } catch (error) {
       Alert.alert('Error', `Failed to open ${app.name}`);
     }
@@ -488,6 +476,9 @@ export default function TabTwoScreen() {
       }
 
       const grantedCount = Object.values(permissionResults).filter((status) => status === PermissionsAndroid.RESULTS.GRANTED).length;
+      if (permissionResults[PermissionsAndroid.PERMISSIONS.READ_CONTACTS] === PermissionsAndroid.RESULTS.GRANTED) {
+        loadContacts();
+      }
       Alert.alert('Permissions updated', `${grantedCount} Android permissions granted. You can also manage any denied permissions from system settings.`);
     } catch (error) {
       Alert.alert('Permission request failed', 'Could not request permissions on this device.');
@@ -585,24 +576,24 @@ export default function TabTwoScreen() {
 
   const renderAppVisual = (item: DeviceApp) => {
     const isLocked = isAppLocked(item.name, item.category);
-    const tintColor = isLocked ? '#52525b' : settings.launcherColor;
+    const tintColor = isLocked ? '#52525b' : iconFgColor;
     const iconValue = typeof item.icon === 'string' ? item.icon : undefined;
     const looksLikeUri = !!iconValue && (iconValue.startsWith('data:') || iconValue.startsWith('content:') || iconValue.startsWith('file:') || iconValue.startsWith('http'));
     const imageUri = looksLikeUri ? iconValue : iconValue && iconValue.length > 120 ? `data:image/png;base64,${iconValue}` : null;
 
     if (imageUri) {
       return (
-        <View className="h-12 w-12 items-center justify-center rounded-2xl overflow-hidden border" style={{ backgroundColor: isLocked ? '#18181b' : withAlpha(settings.launcherColor, '14'), borderColor: isLocked ? '#27272a' : withAlpha(settings.launcherColor, '35') }}>
-          <Image source={{ uri: imageUri }} style={{ width: 30, height: 30, opacity: isLocked ? 0.4 : 1 }} resizeMode="contain" />
+        <View className="h-12 w-12 items-center justify-center rounded-2xl overflow-hidden">
+          <Image source={{ uri: imageUri }} style={{ width: 36, height: 36, opacity: isLocked ? 0.4 : 1 }} resizeMode="contain" />
         </View>
       );
     }
 
     return (
-      <View className="h-12 w-12 items-center justify-center rounded-2xl overflow-hidden" style={{ backgroundColor: isLocked ? '#18181b' : withAlpha(item.accentColor || settings.launcherColor, '22') }}>
+      <View className="h-12 w-12 items-center justify-center rounded-2xl overflow-hidden">
         <MaterialIcons
           name={getMaterialIconForApp(item.name, item.packageName)}
-          size={24}
+          size={26}
           color={tintColor}
         />
       </View>
@@ -631,15 +622,15 @@ export default function TabTwoScreen() {
             {formatTime(currentTime)} • {mode}
           </Text>
         </View>
-        <Pressable onPress={() => setShowSettings((current) => !current)} className="rounded-full border border-white/10 p-3" style={{ backgroundColor: withAlpha('#020617', '10') }}>
-          <MaterialIcons name={settings.launcherIcon as any} size={22} color={settings.launcherColor} />
+        <Pressable onPress={() => setShowSettings((current) => !current)} className="rounded-full border border-white/10 p-3" style={{ backgroundColor: withAlpha(iconBgColor, toAlphaHex(Math.max(10, settings.surfaceOpacity))) }}>
+          <MaterialIcons name={settings.launcherIcon as any} size={22} color={iconFgColor} />
         </Pressable>
       </View>
 
       {showSettings && (
-        <View className="mb-6 max-h-[420px] rounded-3xl border border-white/10 bg-zinc-950/95 p-5" style={{ borderColor: withAlpha(settings.launcherColor, '55'), backgroundColor: withAlpha(settings.launcherColor, '10') }}>
+        <View className="mb-6 max-h-[420px] rounded-3xl border border-white/10 bg-zinc-950/95 p-5" style={{ borderColor: withAlpha(iconBgColor, '55'), backgroundColor: withAlpha(iconBgColor, '10') }}>
           <ScrollView showsVerticalScrollIndicator={false}>
-            <Text className="mb-4 text-lg font-medium text-white" style={launcherFontStyle}>Launcher settings</Text>
+            <Text className="mb-4 text-lg font-medium" style={[{ color: textColor }, launcherFontStyle]}>Launcher settings</Text>
 
             <Text className="mb-2 text-xs uppercase tracking-[2px] text-zinc-500">Focus schedule</Text>
             <View className="mb-4 flex-row gap-3">
@@ -685,22 +676,22 @@ export default function TabTwoScreen() {
                 <View className="flex-1 pr-4">
                   <Text className="mb-2 text-xs text-zinc-500">Selected apps</Text>
                   <Text className="text-sm text-white">
-                    {settings.homeShortcutPackages?.length 
+                    {settings.homeShortcutPackages?.length
                       ? settings.homeShortcutPackages.map(pkg => {
-                          const app = installedApps.find(a => a.packageName === pkg || a.id === pkg || a.scheme === pkg);
-                          return app?.name || pkg.split('.').pop() || pkg;
-                        }).join(', ') 
+                          const app = installedApps.find(a => a.packageName === pkg || a.id === pkg || a.scheme === pkg || a.name === pkg);
+                          return app?.name || pkg;
+                        }).join(', ')
                       : 'Select apps'}
                   </Text>
                 </View>
-                <MaterialIcons name={activePicker === 'homeShortcuts' ? 'keyboard-arrow-up' : 'keyboard-arrow-down'} size={20} color={settings.launcherColor} />
+                <MaterialIcons name={activePicker === 'homeShortcuts' ? 'keyboard-arrow-up' : 'keyboard-arrow-down'} size={20} color={iconFgColor} />
               </Pressable>
 
               {activePicker === 'homeShortcuts' && (
                 <View className="mt-4 flex-row flex-wrap gap-2">
                   {installedApps.map((app) => {
                     const identifier = app.packageName || app.scheme || app.id;
-                    const isSelected = settings.homeShortcutPackages?.includes(identifier);
+                    const isSelected = settings.homeShortcutPackages?.includes(identifier) || settings.homeShortcutPackages?.includes(app.name);
 
                     return (
                       <Pressable
@@ -708,8 +699,8 @@ export default function TabTwoScreen() {
                         onPress={() => toggleHomeShortcut(identifier)}
                         className="flex-row items-center gap-2 rounded-2xl border px-3 py-2"
                         style={{
-                          borderColor: isSelected ? settings.launcherColor : '#27272a',
-                          backgroundColor: isSelected ? withAlpha(settings.launcherColor, '22') : '#18181b',
+                          borderColor: isSelected ? iconBgColor : '#27272a',
+                          backgroundColor: isSelected ? withAlpha(iconBgColor, '22') : '#18181b',
                         }}
                       >
                         {renderAppVisual(app)}
@@ -782,6 +773,39 @@ export default function TabTwoScreen() {
             })}
 
             <View className="mb-4 rounded-2xl bg-zinc-900 px-4 py-3">
+              <View className="flex-row items-center justify-between mb-3">
+                <View className="flex-row items-center gap-2">
+                  <Text className="text-xs text-zinc-500">Contact permission</Text>
+                  <View className="flex-row items-center gap-1 px-2 py-1 rounded-full"
+                    style={{
+                      backgroundColor: contactPermissionStatus === 'granted' ? 'rgba(34, 197, 94, 0.2)' : contactPermissionStatus === 'denied' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(161, 161, 170, 0.2)'
+                    }}
+                  >
+                    <MaterialIcons
+                      name={contactPermissionStatus === 'granted' ? 'check-circle' : contactPermissionStatus === 'denied' ? 'cancel' : 'help'}
+                      size={12}
+                      color={contactPermissionStatus === 'granted' ? '#22c55e' : contactPermissionStatus === 'denied' ? '#ef4444' : '#a1a1aa'}
+                    />
+                    <Text className="text-[10px] uppercase"
+                      style={{
+                        color: contactPermissionStatus === 'granted' ? '#22c55e' : contactPermissionStatus === 'denied' ? '#ef4444' : '#a1a1aa'
+                      }}
+                    >
+                      {contactPermissionStatus === 'granted' ? 'Granted' : contactPermissionStatus === 'denied' ? 'Denied' : 'Unknown'}
+                    </Text>
+                  </View>
+                </View>
+                {contactPermissionStatus !== 'granted' && (
+                  <Pressable
+                    onPress={() => loadContacts(true)}
+                    className="px-3 py-1.5 rounded-lg"
+                    style={{ backgroundColor: withAlpha(settings.launcherColor, '33') }}
+                  >
+                    <Text className="text-xs text-white" style={launcherFontStyle}>Request</Text>
+                  </Pressable>
+                )}
+              </View>
+
               <Pressable onPress={() => setActivePicker((current) => current === 'favoriteContactIds' ? null : 'favoriteContactIds')} className="flex-row items-center justify-between">
                 <View className="flex-1 pr-4">
                   <Text className="mb-2 text-xs text-zinc-500">Favorite contacts</Text>
@@ -860,6 +884,202 @@ export default function TabTwoScreen() {
               </View>
             </View>
 
+            <Text className="mb-2 text-xs uppercase tracking-[2px] text-zinc-500">Separate color controls</Text>
+            <View className="mb-4 rounded-2xl bg-zinc-900 px-4 py-4">
+              <View className="mb-4 flex-row items-center justify-between">
+                <Text className="text-sm text-zinc-300" style={launcherFontStyle}>Use separate colors</Text>
+                <Pressable
+                  onPress={() => updateSettings({ useSeparateColors: !settings.useSeparateColors })}
+                  className="h-6 w-11 rounded-full"
+                  style={{ backgroundColor: settings.useSeparateColors ? settings.launcherColor : '#3f3f46' }}
+                >
+                  <View className={`h-5 w-5 rounded-full bg-white shadow-sm ${settings.useSeparateColors ? 'ml-5' : 'ml-0.5'} mt-0.5`} />
+                </Pressable>
+              </View>
+
+              {settings.useSeparateColors && (
+                <View className="gap-4">
+                  <View>
+                    <Text className="mb-2 text-xs text-zinc-500" style={launcherFontStyle}>Icon background tint</Text>
+                    <View className="flex-row flex-wrap gap-2 mb-3">
+                      {['#3B82F6', '#10B981', '#8B5CF6', '#F43F5E', '#F59E0B', '#6366F1', '#71717A', '#FFFFFF', '#000000', '#18181B'].map((color) => (
+                        <Pressable
+                          key={`iconbg-${color}`}
+                          onPress={() => {
+                            setIconBgInput(color);
+                            updateSettings({ iconBackgroundColor: color });
+                          }}
+                          className="h-9 w-9 rounded-full border-2"
+                          style={{
+                            backgroundColor: color,
+                            borderColor: settings.iconBackgroundColor === color ? '#ffffff' : 'transparent',
+                          }}
+                        />
+                      ))}
+                    </View>
+                    <View className="flex-row items-center gap-3">
+                      <TextInput
+                        value={iconBgInput}
+                        onChangeText={setIconBgInput}
+                        onBlur={() => {
+                          const normalized = normalizeHexColor(iconBgInput);
+                          if (normalized) {
+                            updateSettings({ iconBackgroundColor: normalized });
+                          } else {
+                            setIconBgInput(settings.iconBackgroundColor);
+                          }
+                        }}
+                        autoCapitalize="characters"
+                        placeholder="#3B82F6"
+                        placeholderTextColor="#71717a"
+                        className="flex-1 rounded-xl border border-white/10 px-3 py-2 text-white text-sm"
+                        style={launcherFontStyle}
+                      />
+                      <View className="h-10 w-10 rounded-xl border border-white/10" style={{ backgroundColor: settings.iconBackgroundColor }} />
+                    </View>
+                  </View>
+
+                  <View>
+                    <Text className="mb-2 text-xs text-zinc-500" style={launcherFontStyle}>Icon foreground (icons/text)</Text>
+                    <View className="flex-row flex-wrap gap-2 mb-3">
+                      {['#FFFFFF', '#000000', '#3B82F6', '#10B981', '#8B5CF6', '#F43F5E', '#F59E0B', '#6366F1', '#71717A', '#FBBF24'].map((color) => (
+                        <Pressable
+                          key={`iconfg-${color}`}
+                          onPress={() => {
+                            setIconFgInput(color);
+                            updateSettings({ iconForegroundColor: color });
+                          }}
+                          className="h-9 w-9 rounded-full border-2"
+                          style={{
+                            backgroundColor: color,
+                            borderColor: settings.iconForegroundColor === color ? '#ffffff' : 'transparent',
+                          }}
+                        />
+                      ))}
+                    </View>
+                    <View className="flex-row items-center gap-3">
+                      <TextInput
+                        value={iconFgInput}
+                        onChangeText={setIconFgInput}
+                        onBlur={() => {
+                          const normalized = normalizeHexColor(iconFgInput);
+                          if (normalized) {
+                            updateSettings({ iconForegroundColor: normalized });
+                          } else {
+                            setIconFgInput(settings.iconForegroundColor);
+                          }
+                        }}
+                        autoCapitalize="characters"
+                        placeholder="#FFFFFF"
+                        placeholderTextColor="#71717a"
+                        className="flex-1 rounded-xl border border-white/10 px-3 py-2 text-white text-sm"
+                        style={launcherFontStyle}
+                      />
+                      <View className="h-10 w-10 rounded-xl border border-white/10" style={{ backgroundColor: settings.iconForegroundColor }} />
+                    </View>
+                  </View>
+
+                  <View>
+                    <Text className="mb-2 text-xs text-zinc-500" style={launcherFontStyle}>Card background</Text>
+                    <View className="flex-row flex-wrap gap-2 mb-3">
+                      {['#18181B', '#000000', '#0F172A', '#1E293B', '#111827', '#1C1917', '#0C0A09', '#27272A', '#3B82F6', '#10B981'].map((color) => (
+                        <Pressable
+                          key={`cardbg-${color}`}
+                          onPress={() => {
+                            setCardBgInput(color);
+                            updateSettings({ cardBackgroundColor: color });
+                          }}
+                          className="h-9 w-9 rounded-full border-2"
+                          style={{
+                            backgroundColor: color,
+                            borderColor: settings.cardBackgroundColor === color ? '#ffffff' : 'transparent',
+                          }}
+                        />
+                      ))}
+                    </View>
+                    <View className="flex-row items-center gap-3">
+                      <TextInput
+                        value={cardBgInput}
+                        onChangeText={setCardBgInput}
+                        onBlur={() => {
+                          const normalized = normalizeHexColor(cardBgInput);
+                          if (normalized) {
+                            updateSettings({ cardBackgroundColor: normalized });
+                          } else {
+                            setCardBgInput(settings.cardBackgroundColor);
+                          }
+                        }}
+                        autoCapitalize="characters"
+                        placeholder="#18181B"
+                        placeholderTextColor="#71717a"
+                        className="flex-1 rounded-xl border border-white/10 px-3 py-2 text-white text-sm"
+                        style={launcherFontStyle}
+                      />
+                      <View className="h-10 w-10 rounded-xl border border-white/10" style={{ backgroundColor: settings.cardBackgroundColor }} />
+                    </View>
+                  </View>
+
+                  <View>
+                    <Text className="mb-2 text-xs text-zinc-500" style={launcherFontStyle}>Text color</Text>
+                    <View className="flex-row flex-wrap gap-2 mb-3">
+                      {['#FFFFFF', '#000000', '#D4D4D8', '#A1A1AA', '#3B82F6', '#10B981', '#8B5CF6', '#F43F5E', '#F59E0B', '#FBBF24'].map((color) => (
+                        <Pressable
+                          key={`text-${color}`}
+                          onPress={() => {
+                            setTextColorInput(color);
+                            updateSettings({ textColor: color });
+                          }}
+                          className="h-9 w-9 rounded-full border-2"
+                          style={{
+                            backgroundColor: color,
+                            borderColor: settings.textColor === color ? '#ffffff' : 'transparent',
+                          }}
+                        />
+                      ))}
+                    </View>
+                    <View className="flex-row items-center gap-3">
+                      <TextInput
+                        value={textColorInput}
+                        onChangeText={setTextColorInput}
+                        onBlur={() => {
+                          const normalized = normalizeHexColor(textColorInput);
+                          if (normalized) {
+                            updateSettings({ textColor: normalized });
+                          } else {
+                            setTextColorInput(settings.textColor);
+                          }
+                        }}
+                        autoCapitalize="characters"
+                        placeholder="#FFFFFF"
+                        placeholderTextColor="#71717a"
+                        className="flex-1 rounded-xl border border-white/10 px-3 py-2 text-white text-sm"
+                        style={launcherFontStyle}
+                      />
+                      <View className="h-10 w-10 rounded-xl border border-white/10" style={{ backgroundColor: settings.textColor }} />
+                    </View>
+                  </View>
+
+                  <Pressable
+                    onPress={() => updateSettings({
+                      iconBackgroundColor: settings.launcherColor,
+                      iconForegroundColor: '#FFFFFF',
+                      cardBackgroundColor: '#18181B',
+                      textColor: '#FFFFFF',
+                    })}
+                    className="mt-2 rounded-xl border border-white/10 px-3 py-2 bg-zinc-800"
+                  >
+                    <Text className="text-xs text-white text-center" style={launcherFontStyle}>Reset to defaults</Text>
+                  </Pressable>
+                </View>
+              )}
+
+              {!settings.useSeparateColors && (
+                <Text className="text-xs text-zinc-500 mt-2" style={launcherFontStyle}>
+                  Enable to control icon backgrounds, icon colors, card backgrounds, and text colors independently.
+                </Text>
+              )}
+            </View>
+
             <Text className="mb-2 text-xs uppercase tracking-[2px] text-zinc-500">Launcher font</Text>
             <View className="mb-4 flex-row flex-wrap gap-2">
               {ANDROID_FONT_OPTIONS.map((fontName) => {
@@ -881,19 +1101,21 @@ export default function TabTwoScreen() {
               })}
             </View>
 
-            <View className="mb-4 rounded-2xl px-4 py-4" style={{ backgroundColor: withAlpha(settings.launcherColor, toAlphaHex(Math.max(10, settings.surfaceOpacity))) }}>
+            <View className="mb-4 rounded-2xl px-4 py-4" style={{ backgroundColor: withAlpha(settings.useSeparateColors ? settings.iconBackgroundColor : settings.launcherColor, toAlphaHex(Math.max(10, settings.surfaceOpacity))) }}>
               <Text className="mb-2 text-xs text-zinc-300" style={launcherFontStyle}>Wallpaper and icon tint preview</Text>
               <View className="flex-row items-center justify-between rounded-2xl bg-black/30 px-4 py-4">
                 <View className="flex-row gap-3">
                   {['phone', 'chat', 'camera-alt'].map((iconName) => (
-                    <View key={iconName} className="h-12 w-12 items-center justify-center rounded-2xl bg-black/25">
-                      <MaterialIcons name={iconName as any} size={24} color={settings.launcherColor} />
+                    <View key={iconName} className="h-12 w-12 items-center justify-center rounded-2xl" style={{ backgroundColor: withAlpha(iconBgColor, '22') }}>
+                      <MaterialIcons name={iconName as any} size={24} color={iconFgColor} />
                     </View>
                   ))}
                 </View>
                 <View className="items-end">
-                  <Text className="text-xs uppercase tracking-[2px] text-zinc-400" style={launcherFontStyle}>Tint</Text>
-                  <Text className="mt-1 text-sm text-white" style={launcherFontStyle}>{settings.launcherColor}</Text>
+                  <Text className="text-xs uppercase tracking-[2px] text-zinc-400" style={launcherFontStyle}>{settings.useSeparateColors ? 'Icon BG/FG' : 'Tint'}</Text>
+                  <Text className="mt-1 text-sm text-white" style={launcherFontStyle}>
+                    {settings.useSeparateColors ? `${settings.iconBackgroundColor} / ${settings.iconForegroundColor}` : settings.launcherColor}
+                  </Text>
                 </View>
               </View>
             </View>
@@ -903,7 +1125,7 @@ export default function TabTwoScreen() {
               <Pressable
                 onPress={pickLauncherWallpaper}
                 className="rounded-2xl border border-white/10 px-4 py-3"
-                style={{ backgroundColor: withAlpha(settings.launcherColor, toAlphaHex(Math.max(8, settings.surfaceOpacity))) }}
+                style={{ backgroundColor: withAlpha(iconBgColor, toAlphaHex(Math.max(8, settings.surfaceOpacity))) }}
               >
                 <Text className="text-sm text-white">Choose launcher wallpaper</Text>
               </Pressable>
@@ -925,9 +1147,9 @@ export default function TabTwoScreen() {
                   key={icon}
                   onPress={() => updateSettings({ launcherIcon: icon })}
                   className={`rounded-2xl border px-4 py-3 ${settings.launcherIcon === icon ? 'border-white bg-white/10' : 'border-white/10 bg-zinc-900'}`}
-                  style={settings.launcherIcon === icon ? { borderColor: settings.launcherColor, backgroundColor: withAlpha(settings.launcherColor, '22') } : undefined}
+                  style={settings.launcherIcon === icon ? { borderColor: iconBgColor, backgroundColor: withAlpha(iconBgColor, '22') } : undefined}
                 >
-                  <MaterialIcons name={icon as any} size={18} color={settings.launcherColor} />
+                  <MaterialIcons name={icon as any} size={18} color={iconFgColor} />
                 </Pressable>
               ))}
             </View>
@@ -937,7 +1159,7 @@ export default function TabTwoScreen() {
               <Pressable
                 onPress={requestImportantPermissions}
                 className="rounded-2xl border border-white/10 px-4 py-3"
-                style={{ backgroundColor: withAlpha(settings.launcherColor, toAlphaHex(Math.max(8, settings.surfaceOpacity))) }}
+                style={{ backgroundColor: withAlpha(iconBgColor, toAlphaHex(Math.max(8, settings.surfaceOpacity))) }}
               >
                 <Text className="text-sm text-white">Grant app permissions</Text>
               </Pressable>
@@ -946,7 +1168,7 @@ export default function TabTwoScreen() {
                   key={shortcut.key}
                   onPress={() => openSystemShortcut(shortcut.action, shortcut.fallback)}
                   className="rounded-2xl border border-white/10 px-4 py-3"
-                  style={{ backgroundColor: withAlpha(settings.launcherColor, toAlphaHex(Math.max(8, settings.surfaceOpacity))) }}
+                  style={{ backgroundColor: withAlpha(iconBgColor, toAlphaHex(Math.max(8, settings.surfaceOpacity))) }}
                 >
                   <Text className="text-sm text-white">{shortcut.label}</Text>
                 </Pressable>
@@ -1002,7 +1224,7 @@ export default function TabTwoScreen() {
             <View className="flex-row items-center gap-3">
               {renderAppVisual(item)}
               <View>
-                <Text className="text-xl font-light" style={[{ color: isAppLocked(item.name, item.category) ? '#3f3f46' : settings.launcherColor }, launcherFontStyle]}>
+                <Text className="text-xl font-light" style={[{ color: isAppLocked(item.name, item.category) ? '#3f3f46' : iconFgColor }, launcherFontStyle]}>
                   {item.name}
                 </Text>
                 <Text className="mt-1 text-xs uppercase tracking-widest text-zinc-500" style={launcherFontStyle}>{item.category}</Text>
@@ -1011,7 +1233,7 @@ export default function TabTwoScreen() {
                 )}
               </View>
             </View>
-            <View className="w-2 h-2 rounded-full" style={{ backgroundColor: isAppLocked(item.name, item.category) ? '#3f3f46' : settings.launcherColor }} />
+            <View className="w-2 h-2 rounded-full" style={{ backgroundColor: isAppLocked(item.name, item.category) ? '#3f3f46' : iconFgColor }} />
           </TouchableOpacity>
         )}
         showsVerticalScrollIndicator={false}
@@ -1029,15 +1251,15 @@ export default function TabTwoScreen() {
               ? `Entertainment peek: ${settings.peekMinutes} min`
               : 'All Apps Available'}
         </Text>
-        <View className="mt-4 flex-row items-center justify-center gap-3">
-          <Pressable onPress={() => router.push('/(tabs)/productive')}>
-            <MaterialIcons name="fiber-manual-record" size={10} color={withAlpha(settings.launcherColor, '44')} />
+        <View className="mt-4 flex-row items-center justify-center gap-6">
+          <Pressable onPress={() => router.push('/(tabs)/productive')} className="p-2">
+            <MaterialIcons name="fiber-manual-record" size={20} color={withAlpha(settings.launcherColor, '44')} />
           </Pressable>
-          <Pressable onPress={() => router.push('/(tabs)')}>
-            <MaterialIcons name="fiber-manual-record" size={10} color={withAlpha(settings.launcherColor, '44')} />
+          <Pressable onPress={() => router.push('/(tabs)')} className="p-2">
+            <MaterialIcons name="fiber-manual-record" size={20} color={withAlpha(settings.launcherColor, '44')} />
           </Pressable>
-          <Pressable onPress={() => router.push('/(tabs)/two')}>
-            <MaterialIcons name="fiber-manual-record" size={10} color={settings.launcherColor} />
+          <Pressable onPress={() => router.push('/(tabs)/two')} className="p-2">
+            <MaterialIcons name="fiber-manual-record" size={20} color={settings.launcherColor} />
           </Pressable>
         </View>
       </View>
